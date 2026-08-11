@@ -1,0 +1,19 @@
+# Changes here will be overwritten by Copier
+_commit: 5.3.0
+_src_path: https://github.com/DiamondLightSource/python-copier-template.git
+author_email: lee.hudson@diamond.ac.uk
+author_name: Lee Hudson
+component_lifecycle: production
+component_owner: ''
+component_type: service
+description: Simple framework for simulating vacuum IOCs
+distribution_name: dls-va-ioc-sim
+docker: true
+docs_type: README
+git_platform: github.com
+github_org: DiamondLightSource
+package_name: dls_va_ioc_sim
+pypi: true
+repo_name: dls-va-ioc-sim
+strict_typing: true
+type_checker: pyright

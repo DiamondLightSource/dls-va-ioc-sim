@@ -1,0 +1,10 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: dls-va-ioc-sim
+  title: dls-va-ioc-sim
+  description: Simple framework for simulating vacuum IOCs
+spec:
+  type: service
+  lifecycle: production
+  owner: 
