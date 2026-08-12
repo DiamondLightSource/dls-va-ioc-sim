@@ -28,16 +28,28 @@ Releases        | <https://github.com/DiamondLightSource/dls-va-ioc-sim/releases
 ```console
 $ dls-va-ioc-sim generate .../SR-BUILDER/etc/makeIocs/SR03C-VA-IOC-01.xml 99
 wrote sr99c-va-ioc-01.py
-      sr99c-va-ioc-01.sh
 ```
 
-Two files, named after the IOC in lower case: the instance, and an executable
-launcher that starts it on a non-standard Channel Access port. The `99` rewrites
-the cell number in every device name, so `SR03C` comes up as `SR99C` and the
-simulation cannot be taken for the real machine.
+One file, named after the IOC in lower case, and it is the IOC and its launcher
+both. The `99` rewrites the cell number in every device name, so `SR03C` comes
+up as `SR99C` and the simulation cannot be taken for the real machine — as does
+the non-standard Channel Access port it serves on, which is set at the top of
+the file itself.
 
 ```console
-$ ./sr99c-va-ioc-01.sh
+$ ./sr99c-va-ioc-01.py
+```
+
+A [PEP 723](https://peps.python.org/pep-0723/) header names the version of this
+package that wrote it and a `uv run --script` shebang starts it, so an instance
+runs wherever [uv](https://docs.astral.sh/uv/) does with nothing installed
+first, and goes on running when the framework moves on. In an environment that
+already has the package, `python sr99c-va-ioc-01.py` is the same thing.
+
+Two simulations at once want two ports, and the environment still wins:
+
+```console
+$ EPICS_CA_SERVER_PORT=6066 EPICS_CA_REPEATER_PORT=6067 ./sr99c-va-ioc-01.py
 ```
 
 Then drive it over Channel Access. Stopping pumps makes the pressure rise,

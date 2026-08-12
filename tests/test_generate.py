@@ -1,9 +1,11 @@
-"""Generating the instance and its launcher.
+"""Generating the instance.
 
-The generator writes a pair of files - the Python instance and the shell
-script that starts it - and both are the deliverable, so both are checked
-here.  The instance is only parsed, not run: building its records needs the
-whole of softioc and is done once, in test_instance.py, in a subprocess.
+One file is the whole deliverable: the instance is its own launcher, so the
+header that makes it runnable - the shebang, the PEP 723 dependency, the
+Channel Access ports - is as much a part of the output as the devices are, and
+is checked here.  The instance is only parsed, not run: building its records
+needs the whole of softioc and is done once, in test_instance.py, in a
+subprocess.
 """
 
 import ast
@@ -17,8 +19,8 @@ from dls_va_ioc_sim.generate_ioc import (
     CA_REPEATER_PORT,
     CA_SERVER_PORT,
     generate,
-    instancePaths,
-    launcherSource,
+    instancePath,
+    requirement,
 )
 
 
@@ -70,39 +72,69 @@ def test_every_valve_is_built_even_though_none_is_a_gate(declarations):
         assert f'valveRecord("{prefix}")' in source
 
 
-def test_the_launcher_keeps_the_non_standard_ports():
-    launcher = launcherSource("sr99c-va-ioc-01.py")
+def test_the_instance_keeps_the_non_standard_ports(declarations):
+    """The ports are in the instance, not in a wrapper around it: there is
+    then no way to start one on the real machine's port by forgetting a
+    step."""
+    source = generate(declarations)
 
-    assert f"export EPICS_CA_SERVER_PORT={CA_SERVER_PORT}" in launcher
-    assert f"export EPICS_CA_REPEATER_PORT={CA_REPEATER_PORT}" in launcher
+    assert (
+        f'os.environ.setdefault("EPICS_CA_SERVER_PORT", "{CA_SERVER_PORT}")' in source
+    )
+    assert (
+        f'os.environ.setdefault("EPICS_CA_REPEATER_PORT", "{CA_REPEATER_PORT}")'
+        in source
+    )
     assert CA_SERVER_PORT != 5064, "5064 is the real machine's port"
 
 
-def test_the_launcher_starts_its_own_instance():
-    launcher = launcherSource("sr99c-va-ioc-01.py")
+def test_the_ports_are_set_before_softioc_is_imported(declarations):
+    """Whatever libca reads them at, the ports have to be in the environment
+    before anything of EPICS starts up, and this is the order that was
+    tested."""
+    source = generate(declarations)
 
-    assert launcher.startswith("#!/bin/sh")
-    # cd first, so it works however it was invoked.
-    assert 'cd "$(dirname "$0")"' in launcher
-    assert launcher.rstrip().endswith('exec $PYIOC sr99c-va-ioc-01.py "$@"')
+    assert source.index("EPICS_CA_SERVER_PORT") < source.index("from softioc import")
 
 
-def test_the_pair_is_named_after_the_ioc_in_lower_case(declarations, tmp_path):
+def test_the_instance_is_its_own_launcher(declarations):
+    source = generate(declarations, instance="sr99c-va-ioc-01.py")
+
+    # uv reads the header, builds the environment and runs the file: the
+    # shebang is what makes ./sr99c-va-ioc-01.py all there is to it.
+    assert source.startswith("#!/usr/bin/env -S uv run --script\n")
+    assert "# /// script\n" in source
+    assert f'# dependencies = ["{requirement()}"]\n' in source
+    assert "dls-va-ioc-sim" in requirement()
+    # And it names itself, so the file says how to run the file.
+    assert "./sr99c-va-ioc-01.py" in source
+
+
+def test_an_unreleased_generator_does_not_pin_a_version_that_is_on_no_index(
+    monkeypatch,
+):
+    """setuptools_scm gives a checkout something like 0.1.dev0+d20260811.
+    Pinning that writes an instance that cannot resolve and so cannot start."""
+    import dls_va_ioc_sim.generate_ioc as generator
+
+    monkeypatch.setattr(generator, "__version__", "0.1.dev0+d20260811")
+    assert generator.requirement() == "dls-va-ioc-sim"
+
+    monkeypatch.setattr(generator, "__version__", "1.0.0b1")
+    assert generator.requirement() == "dls-va-ioc-sim==1.0.0b1"
+
+
+def test_the_instance_is_named_after_the_ioc_in_lower_case(declarations, tmp_path):
     os.chdir(tmp_path)
-    instance, launcher = instancePaths(declarations)
 
-    assert os.path.basename(instance) == "sr99c-va-ioc-01.py"
-    assert os.path.basename(launcher) == "sr99c-va-ioc-01.sh"
+    assert os.path.basename(instancePath(declarations)) == "sr99c-va-ioc-01.py"
 
 
-def test_an_explicit_output_names_the_launcher_too(declarations):
-    instance, launcher = instancePaths(declarations, "/tmp/scratch.py")
-
-    assert instance == "/tmp/scratch.py"
-    assert launcher == "/tmp/scratch.sh"
+def test_an_explicit_output_is_taken_as_it_is(declarations):
+    assert instancePath(declarations, "/tmp/scratch.py") == "/tmp/scratch.py"
 
 
-def test_the_cli_writes_both_files_and_marks_the_launcher_executable(
+def test_the_cli_writes_the_instance_and_marks_it_executable(
     cellXml, tmp_path, monkeypatch
 ):
     from dls_va_ioc_sim.__main__ import main
@@ -113,13 +145,14 @@ def test_the_cli_writes_both_files_and_marks_the_launcher_executable(
     assert exit.value.code == 0
 
     instance = tmp_path / "sr99c-va-ioc-01.py"
-    launcher = tmp_path / "sr99c-va-ioc-01.sh"
-    assert instance.exists() and launcher.exists()
-    assert launcher.stat().st_mode & stat.S_IXUSR, "a launcher has to run"
+    assert instance.exists()
+    assert instance.stat().st_mode & stat.S_IXUSR, "an instance has to run"
     ast.parse(instance.read_text())
+    # It is written under the name it was saved as, whatever -o said.
+    assert "./sr99c-va-ioc-01.py" in instance.read_text()
 
 
-def test_it_will_not_overwrite_a_pair_that_may_have_been_edited(
+def test_it_will_not_overwrite_an_instance_that_may_have_been_edited(
     cellXml, tmp_path, monkeypatch
 ):
     from dls_va_ioc_sim.__main__ import main
@@ -144,20 +177,19 @@ def test_it_will_not_overwrite_a_pair_that_may_have_been_edited(
     assert instance.read_text() != edited
 
 
-def test_half_a_pair_is_never_written(cellXml, tmp_path, monkeypatch):
-    """If either file exists, neither is written: the instance is the half
-    that gets edited, and a launcher without one is no use."""
+def test_an_instance_written_elsewhere_names_itself(cellXml, tmp_path, monkeypatch):
+    """The header tells you how to run the file, so it has to be the name the
+    file was actually saved as and not the one the IOC would have had."""
     from dls_va_ioc_sim.__main__ import main
 
     monkeypatch.chdir(tmp_path)
-    launcher = tmp_path / "sr99c-va-ioc-01.sh"
-    launcher.write_text("# mine\n")
-
     with pytest.raises(SystemExit) as exit:
-        main(["generate", str(cellXml), "99"])
-    assert exit.value.code == 1
-    assert not (tmp_path / "sr99c-va-ioc-01.py").exists()
-    assert launcher.read_text() == "# mine\n"
+        main(["generate", str(cellXml), "99", "-o", "scratch.py"])
+    assert exit.value.code == 0
+
+    source = (tmp_path / "scratch.py").read_text()
+    assert "./scratch.py" in source
+    assert "./sr99c-va-ioc-01.py" not in source
 
 
 def test_a_dry_run_writes_nothing(cellXml, tmp_path, monkeypatch):

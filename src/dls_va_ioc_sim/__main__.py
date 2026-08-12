@@ -2,14 +2,16 @@
 
 Three things to do with a builder XML, which is the only input this tool has:
 
-    generate    write a simulation instance and its launcher, to be edited
+    generate    write a simulation instance, to be edited and then run
     run         build the same devices and serve them, without writing a file
     dbdump      build an instance's records and dump them, without an IOC
 
 `generate` is the usual way in.  The file it writes is the configuration: it
 can be read by someone who has never seen the XML, and the one thing an XML
 cannot say - which valve stands between which two lengths of pipe - is left in
-it marked EDIT ME.  `run` is the same devices with that layout left as the
+it marked EDIT ME.  It is also its own launcher - executable, with a PEP 723
+header naming the version of this package it was written by - so running it
+needs nothing installed but uv.  `run` is the same devices with that layout left as the
 guess, for a look at a cell without committing to a file.  `dbdump` is the
 check that a change to the framework has not moved a record it should not
 have: dump before, dump after, diff.
@@ -78,7 +80,7 @@ def main(args: Sequence[str] | None = None) -> None:
 
     generate = subcommands.add_parser(
         "generate",
-        help="write a simulation instance and its launcher from a builder XML",
+        help="write a runnable simulation instance from a builder XML",
     )
     addArguments(generate)
     generate.set_defaults(

@@ -13,6 +13,7 @@ tripwires whichever instance happened to be built, and goes stale the moment
 anyone adds a device.
 """
 
+import os
 import subprocess
 import sys
 
@@ -96,9 +97,17 @@ def test_a_layout_leaving_a_device_off_a_volume_is_refused(generated):
     assert firstGauge.strip('"') in result.stderr
 
 
-def test_the_launcher_names_the_instance_beside_it(generated):
-    launcher = generated.with_suffix(".sh")
-    assert launcher.read_text().rstrip().endswith(f'{generated.name} "$@"')
+def test_the_instance_is_the_only_file_written_and_it_can_be_run(generated):
+    """There is no launcher beside it any more: the shebang and the PEP 723
+    header are what start it, so the file has to be executable and has to name
+    the package it needs."""
+    assert [path.name for path in generated.parent.iterdir()] == [generated.name]
+
+    assert os.access(generated, os.X_OK), "an instance has to run"
+    lines = generated.read_text().splitlines()
+    assert lines[0] == "#!/usr/bin/env -S uv run --script"
+    assert lines[1] == "# /// script"
+    assert any(line.startswith('# dependencies = ["dls-va-ioc-sim') for line in lines)
 
 
 # The other way in: parsed_ioc builds the same devices at start up rather than

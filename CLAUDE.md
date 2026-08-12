@@ -29,7 +29,7 @@ When adding or editing a device, the template it imitates is the specification;
 each module's docstring carries the class → `*.template` mapping.
 
 ```bash
-dls-va-ioc-sim generate <xml> <cell>   # the way in: writes the pair of files
+dls-va-ioc-sim generate <xml> <cell>   # the way in: writes one runnable file
 dls-va-ioc-sim run <xml> <cell>        # the same devices, no file, IOC shell
 dls-va-ioc-sim dbdump <instance> <db>  # build the records, do not start an IOC
 ```
@@ -241,21 +241,18 @@ Steps 1, 3, 4 and 5 are already written down in the builder XML the real IOC is
 built from. `generate_ioc.py` reads that and writes the instance out as Python:
 
 ```bash
-dls-va-ioc-sim generate .../SR03C-VA-IOC-01.xml 99     # -> sr99c-va-ioc-01.{py,sh}
+dls-va-ioc-sim generate .../SR03C-VA-IOC-01.xml 99     # -> sr99c-va-ioc-01.py
 dls-va-ioc-sim generate .../SR21C-VA-IOC-01.xml 99 -n  # report only, write nothing
 ```
 
-**Two files come out**, named after the IOC in lower case and written into the
-current directory: the instance, and an executable launcher that sets the
-non-standard Channel Access ports and execs pythonSoftIOC on it. An instance
-launcher differs from every other one by the filename it execs and nothing
-else, which is why it is generated rather than kept per IOC and edited.
+**One file comes out**, named after the IOC in lower case, written into the
+current directory and executable — it is the instance *and* its launcher. See
+*The instance is its own launcher* below.
 
 **Generate, then edit.** The output is a plain instance file that imports only
 the installed package — no template to keep in step, and hand edits are never
-undone by regenerating something else. It refuses to overwrite an existing pair
-without `--force`, because the one you have has probably been edited; and if
-either file exists neither is written, since half a pair is worse than none.
+undone by regenerating something else. It refuses to overwrite an existing
+instance without `--force`, because the one you have has probably been edited.
 
 Checked by generating `SR99C-VA-IOC-01.py` and diffing against the hand-written
 one: **2080 records, byte identical databases.** All 24 `SR-BUILDER` cell XMLs
@@ -310,11 +307,49 @@ wherever its IOC does rather than having to live beside the framework. The
 generator writes into the current directory in consequence, not beside itself —
 beside itself is now site-packages.
 
-The one thing that follows: **the launcher's pythonSoftIOC has to be able to
-import the package.** `/dls_sw/prod/.../softioc/4.6.0` is its own interpreter,
-so `dls-va-ioc-sim` must be installed into it (or on `PYTHONPATH`) for a
-generated `.sh` to start. That is the one place the port swapped a problem
-rather than removing it.
+### The instance is its own launcher
+
+Making the modules a package left one problem behind: **whatever runs a
+generated instance has to be able to import `dls_va_ioc_sim`**, which the
+`/dls_sw/prod/.../softioc/4.6.0` interpreter the old `.sh` exec'd cannot. The
+instance now answers that itself, and there is no `.sh` at all:
+
+```python
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["dls-va-ioc-sim==1.0.0b1"]
+# ///
+```
+
+`./sr99c-va-ioc-01.py` is now the whole of it: uv builds the environment the
+header asks for, caches it, and runs the file in it. `python
+sr99c-va-ioc-01.py` still works in an environment that already has the package.
+
+- **The pin is the version that generated the file**, so an instance written
+  today still starts when the framework has moved on. A checkout's
+  setuptools_scm version (`0.1.dev0+d20260811`) is on no index, so
+  `requirement()` writes the dependency **unpinned** when the generator is
+  unreleased — otherwise generating from a working tree would write a file that
+  cannot resolve. Note what that means when testing: `uv run --script` on an
+  instance generated from a checkout fetches the *released* package, not your
+  working tree. Use `python instance.py` in the project venv to exercise local
+  changes, or `dbdump`, which never leaves the process.
+- **The Channel Access ports are set in the instance**, at the top, before
+  softioc is imported — `os.environ.setdefault("EPICS_CA_SERVER_PORT", "6064")`.
+  In the shell script they were one forgotten wrapper away from 5064; in the
+  file they cannot be lost. `setdefault` means the environment still wins, so
+  `EPICS_CA_SERVER_PORT=6066 ./other-instance.py` runs a second simulation
+  beside the first. The numbers live in `CA_SERVER_PORT`/`CA_REPEATER_PORT` in
+  `generate_ioc.py`.
+- **`pythonSoftIOC` was never doing anything.** Its entry point is twelve lines
+  that `subprocess.Popen([sys.executable, script])` — it is only "an interpreter
+  with softioc in it", which is exactly what the PEP 723 header asks uv for. It
+  also does not exec, so a signal sent to it never reaches the IOC; running the
+  file directly is better under procServ, not just shorter.
+- **`examples/` deliberately has no such header.** Those instances are run from
+  the checkout to exercise the working tree, and a PEP 723 header would quietly
+  run the release instead.
 
 ## softioc versions — the trap is retired, keep the habit
 
@@ -429,8 +464,15 @@ it can never be mistaken for real hardware:
 
 ```bash
 EPICS_CA_SERVER_PORT=15064 EPICS_CAS_INTF_ADDR_LIST=127.0.0.1 \
-  EPICS_CAS_BEACON_ADDR_LIST=127.0.0.1 sh -c 'sleep 420 | pythonSoftIOC FE99B-CS-IOC-01.py'
+  EPICS_CAS_BEACON_ADDR_LIST=127.0.0.1 \
+  sh -c 'sleep 420 | uv run python examples/FE99B-CS-IOC-01.py'
 ```
+
+Plain `python`, not `pythonSoftIOC`: that entry point only Popens
+`sys.executable` on the script, and the project venv is the interpreter you
+want here — an example has no PEP 723 header precisely so that it runs the
+working tree. A *generated* instance is `./sr99c-va-ioc-01.py` on its own, and
+sets its own port, so it needs only the two `EPICS_CAS_*` lines above.
 
 - `interactive_ioc` **exits on stdin EOF**, so `< /dev/null` kills the IOC at once.
   Hold stdin open with a piped `sleep`, which also bounds its life.
@@ -512,15 +554,15 @@ EPICS_CA_SERVER_PORT=15064 EPICS_CAS_INTF_ADDR_LIST=127.0.0.1 \
   multiply this: a valve in two groups gets driven twice, so one `GVALV-04:CON`
   write can stall the simulation for seconds. Harmless at half a second, but do not
   lengthen it far.
-- **The hand-written launchers are gone; the generator writes them.** `start-ioc`
-  and `va-start-ioc` in the old tree were the same script differing only in the
-  filename they exec'd, which is exactly what a generated `.sh` now is. The
-  Channel Access ports live in `CA_SERVER_PORT`/`CA_REPEATER_PORT` in
-  `generate_ioc.py`, currently 6064/6065 — **not** 5064, so the simulation
-  cannot be found by a client looking for the real machine.
-- **Every generated launcher uses the same port**, so two simulations cannot
-  run side by side without editing one of them. Make it a flag if that starts
-  to hurt.
+- **There is no launcher script any more, and there is nothing to put back.**
+  `start-ioc` and `va-start-ioc` in the old tree became a generated `.sh`, and
+  that became the instance's own header — see *The instance is its own
+  launcher*. The ports are still 6064/6065 and still **not** 5064, so the
+  simulation cannot be found by a client looking for the real machine.
+- **Every instance defaults to the same port**, but the environment overrides
+  it, so two simulations run side by side by starting the second with
+  `EPICS_CA_SERVER_PORT=6066 EPICS_CA_REPEATER_PORT=6067`. Nothing has to be
+  edited; make it a flag only if that starts to hurt.
 - **`examples/` is not on the test path and is not generated.** The two
   hand-written instances there are documentation; they were updated by hand for
   the package imports, and `FE99B-CS-IOC-01.py` is the only thing exercising
