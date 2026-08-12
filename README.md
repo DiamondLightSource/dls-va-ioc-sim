@@ -60,6 +60,21 @@ $ caput SR99A-VA-GIONP-01:STOP 1        # a whole group of supplies
 $ camonitor SR99A-VA-GAUGE-01:P         # watch it come up
 ```
 
+## A whole ring at once
+
+`start` serves any number of written instances as a single IOC, on one port —
+which is what a container wants, and the only shape that works where every pod
+shares a node's network stack:
+
+```console
+$ dls-va-ioc-sim start sr*.py --no-interactive
+24 instance(s), 49920 records, 1032 devices: sr01c-va-ioc-01.py, …
+```
+
+One instance behaves exactly as running that instance does. Generate each cell
+with **its own** number: distinct PV names are what let them share one
+database.
+
 To look at a cell without committing to a file, `run` builds the same devices
 straight from the XML:
 

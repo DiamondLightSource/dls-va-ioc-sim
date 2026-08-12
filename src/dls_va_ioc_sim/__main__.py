@@ -1,8 +1,9 @@
 """The command line: ``dls-va-ioc-sim`` and ``python -m dls_va_ioc_sim``.
 
-Three things to do with a builder XML, which is the only input this tool has:
+Four things to do with a builder XML, which is the only input this tool has:
 
     generate    write a simulation instance, to be edited and then run
+    start       serve one or more written instances as a single IOC
     run         build the same devices and serve them, without writing a file
     dbdump      build an instance's records and dump them, without an IOC
 
@@ -11,7 +12,13 @@ can be read by someone who has never seen the XML, and the one thing an XML
 cannot say - which valve stands between which two lengths of pipe - is left in
 it marked EDIT ME.  It is also its own launcher - executable, with a PEP 723
 header naming the version of this package it was written by - so running it
-needs nothing installed but uv.  `run` is the same devices with that layout left as the
+needs nothing installed but uv.
+
+`start` is for running more than one at a time: a whole storage ring of cells
+in one process, on one Channel Access port, which is what a container wants.
+One instance behaves exactly as running that instance directly does.
+
+`run` is the same devices with that layout left as the
 guess, for a look at a cell without committing to a file.  `dbdump` is the
 check that a change to the framework has not moved a record it should not
 have: dump before, dump after, diff.
@@ -56,6 +63,19 @@ def runCommand(arguments: Namespace) -> int:
     ioc.attach(namespace["vacuum"])
 
     ioc.run(interactive=arguments.interactive, namespace=namespace)
+    return 0
+
+
+def startCommand(arguments: Namespace) -> int:
+    """Serve one or more generated instances as a single IOC."""
+    from .start_ioc import startInstances  # noqa: PLC0415
+
+    startInstances(
+        arguments.instances,
+        period=arguments.period,
+        interactive=arguments.interactive,
+        queueSize=arguments.callback_queue,
+    )
     return 0
 
 
@@ -106,6 +126,39 @@ def main(args: Sequence[str] | None = None) -> None:
         help="do not drop into the IOC shell once it is up",
     )
     run.set_defaults(command=runCommand)
+
+    start = subcommands.add_parser(
+        "start",
+        help="serve one or more generated instances as a single IOC",
+    )
+    start.add_argument(
+        "instances",
+        nargs="+",
+        help="generated instances; a shell glob is the usual way to name a "
+        "directory of them, and one file behaves as running that file does",
+    )
+    start.add_argument(
+        "--period",
+        type=float,
+        default=None,
+        help="seconds between recalculations of every readback (default 1.0, "
+        "which is the SCAN rate the real templates poll their hardware at)",
+    )
+    start.add_argument(
+        "--callback-queue",
+        type=int,
+        default=None,
+        help="entries in the EPICS cbLow ring, which every readback update "
+        "queues onto (default: four per record, at least 20000)",
+    )
+    start.add_argument(
+        "--no-interactive",
+        dest="interactive",
+        action="store_false",
+        help="do not drop into the IOC shell once it is up - a container has "
+        "no stdin to read and an IOC shell exits when it reaches the end of one",
+    )
+    start.set_defaults(command=startCommand)
 
     dbdump = subcommands.add_parser(
         "dbdump",

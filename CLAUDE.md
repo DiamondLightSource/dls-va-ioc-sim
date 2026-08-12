@@ -30,6 +30,7 @@ each module's docstring carries the class → `*.template` mapping.
 
 ```bash
 dls-va-ioc-sim generate <xml> <cell>   # the way in: writes one runnable file
+dls-va-ioc-sim start <instance>...     # serve one or many as a single IOC
 dls-va-ioc-sim run <xml> <cell>        # the same devices, no file, IOC shell
 dls-va-ioc-sim dbdump <instance> <db>  # build the records, do not start an IOC
 ```
@@ -49,9 +50,10 @@ The framework, in `src/dls_va_ioc_sim/`:
 | `vacuum_sim.py` | Shared helpers: pressure range, log-space slide, noise |
 | `builder_xml.py` | Reads a real IOC's builder XML. Plain data, **no records** |
 | `generate_ioc.py` | Writes an instance out as Python, from that. The way in |
+| `start_ioc.py` | Serves written instances, one or many, as a single IOC |
 | `parsed_ioc.py` | Builds the records instead, for an instance that parses at start up |
 | `dbdump.py` | Builds an instance's records without starting it |
-| `__main__.py` | The CLI over the three of those that are commands |
+| `__main__.py` | The CLI over the four of those that are commands |
 
 The instances, in `examples/`:
 
@@ -350,6 +352,41 @@ sr99c-va-ioc-01.py` still works in an environment that already has the package.
 - **`examples/` deliberately has no such header.** Those instances are run from
   the checkout to exercise the working tree, and a PEP 723 header would quietly
   run the release instead.
+
+### More than one cell at a time: `start`
+
+`dls-va-ioc-sim start a.py b.py …` serves any number of written instances as
+**one IOC on one port**, and one file behaves exactly as running that file
+does. `start_ioc.py` stubs the four things that *start* an IOC — `LoadDatabase`,
+`iocInit`, `interactive_ioc`, `AsyncioDispatcher` — while it `exec`s each file,
+which is `dbdump`'s trick with the stubs put back afterwards, then starts the
+IOC once over the merged recordset with one tick loop. **The instances need no
+change at all**; keep it that way.
+
+- **Each file gets its own namespace.** Every instance has a `vacuum`, an
+  `upstream` and a `dispatcher` at module scope, so one namespace would have
+  cells silently overwriting each other. The IOC shell gets them as
+  `instances`, keyed by filename:
+  `instances["sr06c-va-ioc-01.py"]["upstream"].gasLoad = 1.0e-4`.
+- **Cells must be generated with their own numbers.** Distinct PV names are
+  what lets them share one database; all-99 builds duplicate records and the
+  second instance fails.
+- **`callbackSetQueueSize` is not optional above a few thousand records.**
+  Every `.set()` from the tick loop queues a record process on EPICS's `cbLow`
+  ring, which defaults to **2000 entries**. One cell never comes near it; 24
+  cells put ~50000 on it in one pass, and the overflow is *silent* — dropped
+  record processing, frozen readbacks, missed monitors, and nothing but
+  `callbackRequest: ERROR cbLow ring buffer full` on stderr. Measured: 25805
+  overflows in the first minute before the ring was sized, none after. It is
+  sized from the record count (four entries a record) and has to be set
+  **after `LoadDatabase` and before `iocInit`**, which is where EPICS creates
+  the ring.
+- **`--no-interactive` is what a container wants.** An IOC shell reads stdin,
+  and a container nothing is attached to reaches EOF and exits.
+- Measured on 24 cells (one XML regenerated as cells 01–24): **49920 records,
+  1032 devices, ~11s to build, 322 MiB resident, 15% of one core.** That is
+  the sizing argument for one process over one pod per cell — and under
+  `hostNetwork` 24 pods would in any case be 24 attempts to bind 6064.
 
 ## softioc versions — the trap is retired, keep the habit
 
