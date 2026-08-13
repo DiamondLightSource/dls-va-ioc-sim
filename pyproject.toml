@@ -14,7 +14,10 @@ classifiers = [
 ]
 description = "Simple framework for simulating vacuum IOCs"
 dependencies = [
-    "softioc",        # the records, the dispatcher and the IOC shell
+    # >=4.6 for iocInit(enable_pva=...).  4.4 and 4.5 have no keyword and no
+    # pvAccess server either, so the floor is about the argument existing, not
+    # about the server: passing it to 4.5 is a TypeError at start up.
+    "softioc>=4.6",   # the records, the dispatcher and the IOC shell
     "epicsdbbuilder", # dbdump writes the recordset out without loading it
 ]
 dynamic = ["version"]

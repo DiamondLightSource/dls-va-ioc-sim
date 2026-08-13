@@ -13,6 +13,7 @@ from softioc import asyncio_dispatcher, builder, softioc
 
 from .builder_xml import attachLayout, parseXml
 from .device_groups import orderedGroups
+from .epics_ports import setPortDefaults
 from .fe_seq_records import valveGroupRecord, valveRecord
 from .gauge_records import (
     gaugeGroupRecord,
@@ -148,9 +149,18 @@ class parsedIoc:
         """
         devices = self.tickList()
 
+        # A generated instance settles its own ports in its header; this one
+        # has no header to put them in, so it says so here.  Without this,
+        # `dls-va-ioc-sim run` served a cell on whatever Channel Access
+        # configuration it inherited - which on a machine at Diamond is the
+        # real one.
+        setPortDefaults()
+
         builder.LoadDatabase()
         dispatcher = asyncio_dispatcher.AsyncioDispatcher()
-        softioc.iocInit(dispatcher)
+        # enable_pva=False - see epics_ports.  A PVXS server would otherwise
+        # serve these same PVs on the standard pvAccess port.
+        softioc.iocInit(dispatcher, enable_pva=False)
 
         async def simulate():
             # No arguments: the dispatcher hands extra ones to the coroutine

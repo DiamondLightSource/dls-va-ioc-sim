@@ -33,6 +33,8 @@ import epicsdbbuilder
 from softioc import asyncio_dispatcher, builder, softioc
 from softioc.imports import callbackSetQueueSize
 
+from .epics_ports import setPortDefaults
+
 SIMULATION_PERIOD = 1.0
 
 # Every .set() from the tick loop queues a record process on EPICS's cbLow
@@ -133,6 +135,13 @@ def startInstances(paths, period=None, interactive=True, queueSize=None, log=Non
     period = SIMULATION_PERIOD if period is None else period
     report = log or (lambda message: print(message, flush=True))
 
+    # Not left to the instances.  Each one sets the same variables in its own
+    # header, but a hand-written instance need not, and an instance that is
+    # missing them would be served on the real machine's port by a `start`
+    # that trusted it.  setdefault, so an instance setting them again is a
+    # no-op and the environment still wins over both.
+    setPortDefaults()
+
     instances = loadInstances(paths)
     devices = tickList(instances)
 
@@ -148,7 +157,11 @@ def startInstances(paths, period=None, interactive=True, queueSize=None, log=Non
     callbackSetQueueSize(queueSize or callbackQueueSize(records))
 
     dispatcher = asyncio_dispatcher.AsyncioDispatcher()
-    softioc.iocInit(dispatcher)
+    # enable_pva=False: pythonSoftIOC would otherwise start a PVXS/QSRV2 server
+    # beside the Channel Access one, serving every record of every cell under
+    # its own name on the standard pvAccess port, which no EPICS_CA_* setting
+    # moves.  A whole simulated ring on 5075 is what this stops.
+    softioc.iocInit(dispatcher, enable_pva=False)
 
     async def simulate():
         # No arguments: the dispatcher hands extra ones to the coroutine

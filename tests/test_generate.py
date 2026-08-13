@@ -10,14 +10,19 @@ subprocess.
 
 import ast
 import os
+import re
 import stat
 
 import pytest
 
 from dls_va_ioc_sim.builder_xml import parseXml
-from dls_va_ioc_sim.generate_ioc import (
+from dls_va_ioc_sim.epics_ports import (
     CA_REPEATER_PORT,
     CA_SERVER_PORT,
+    PVA_BROADCAST_PORT,
+    PVA_SERVER_PORT,
+)
+from dls_va_ioc_sim.generate_ioc import (
     generate,
     instancePath,
     requirement,
@@ -86,6 +91,49 @@ def test_the_instance_keeps_the_non_standard_ports(declarations):
         in source
     )
     assert CA_SERVER_PORT != 5064, "5064 is the real machine's port"
+
+
+def test_the_instance_serves_no_pvaccess(declarations):
+    """pythonSoftIOC starts a PVXS server beside the Channel Access one, which
+    offers the same records under the same names and has never heard of
+    EPICS_CA_SERVER_PORT. An instance safely on 6064 still answered
+    `pvget SR06A-VA-IONP-01:P` on the standard pvAccess port until this."""
+    source = generate(declarations)
+
+    assert "softioc.iocInit(dispatcher, enable_pva=False)" in source
+
+
+def test_the_pvaccess_ports_are_moved_too(declarations):
+    """The second layer, for if pvAccess is ever switched back on: it should
+    come up somewhere harmless rather than on the real machine's port."""
+    source = generate(declarations)
+
+    assert (
+        f'os.environ.setdefault("EPICS_PVAS_SERVER_PORT", "{PVA_SERVER_PORT}")'
+        in source
+    )
+    assert (
+        f'os.environ.setdefault("EPICS_PVAS_BROADCAST_PORT", "{PVA_BROADCAST_PORT}")'
+        in source
+    )
+    assert PVA_SERVER_PORT != 5075, "5075 is the real machine's pvAccess port"
+
+
+def test_the_tick_loop_can_say_which_device_failed(declarations):
+    """The instance is written out by a %-format template, so the tick loop's
+    own %s has to survive being generated - and it did not. A bare conversion
+    took the whole mapping, so the line came out as
+
+        logging.exception("Simulation failed for {'volume': 'sr99s'}", ...)
+
+    which raises inside logging and loses the device name at exactly the
+    moment a device has failed and every readback has frozen."""
+    source = generate(declarations)
+
+    message = re.search(r'logging\.exception\("([^"]*)"', source).group(1)
+
+    # Formatted the way logging formats it: msg % args, args being a tuple.
+    assert message % ("SR99A-VA-IONP-01",) == "Simulation failed for SR99A-VA-IONP-01"
 
 
 def test_the_ports_are_set_before_softioc_is_imported(declarations):

@@ -119,6 +119,54 @@ def test_a_file_that_is_not_an_instance_says_so(tmp_path):
     assert "defines no simulatedDevices" in result.stderr
 
 
+def test_the_ports_are_settled_for_an_instance_that_does_not_settle_them(tmp_path):
+    """A generated instance carries the ports in its own header, but one
+    written by hand need not, and `start` must not be the thing that trusts
+    it. Stopped at iocInit, which is where EPICS reads them."""
+    (tmp_path / "bare.py").write_text(
+        textwrap.dedent(
+            """
+            from softioc import builder
+            builder.SetDeviceName("BARE")
+            builder.aIn("V", initial_value=1.0)
+            simulatedDevices = []
+            """
+        )
+    )
+
+    result = python(
+        """
+        import os
+        for name in [n for n in os.environ if n.startswith("EPICS_")]:
+            del os.environ[name]
+
+        from softioc import softioc
+        from dls_va_ioc_sim.start_ioc import startInstances
+
+        class Started(Exception):
+            pass
+
+        def started(*arguments, **keywords):
+            raise Started
+
+        softioc.iocInit = started
+        try:
+            startInstances(["bare.py"], interactive=False)
+        except Started:
+            pass
+
+        print(os.environ.get("EPICS_CA_SERVER_PORT"),
+              os.environ.get("EPICS_PVAS_SERVER_PORT"))
+        """,
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    caPort, pvaPort = result.stdout.split()[-2:]
+    assert caPort not in ("5064", "None"), "served on the real machine's CA port"
+    assert pvaPort not in ("5075", "None"), "pvAccess left on the real port"
+
+
 def test_the_callback_queue_is_sized_from_the_database(tmp_path):
     """The cbLow ring defaults to 2000 entries and every readback update
     queues onto it. One cell never comes near that; a ring of cells overflows

@@ -217,7 +217,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "epicsdbbuilder" },
-    { name = "softioc" },
+    { name = "softioc", specifier = ">=4.6" },
 ]
 
 [package.metadata.requires-dev]

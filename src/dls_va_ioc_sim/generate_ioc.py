@@ -40,6 +40,12 @@ import sys
 
 from ._version import __version__
 from .builder_xml import GROUP_KINDS, parseXml
+from .epics_ports import (
+    CA_REPEATER_PORT,
+    CA_SERVER_PORT,
+    PVA_BROADCAST_PORT,
+    PVA_SERVER_PORT,
+)
 
 # Device family -> the stem of the variable name generated for it.
 FAMILY_NAMES = {
@@ -61,11 +67,12 @@ GROUP_CALLS = {
 
 DOMAIN_PATTERN = re.compile(r"^([A-Z]{2,3})(\d{2})(.*)$")
 
-# Channel Access is served on a non-standard port, for the same reason the cell
-# number in every device name is rewritten: a client looking for the real
-# machine must never find this instead.  The repeater goes on the port above.
-CA_SERVER_PORT = 6064
-CA_REPEATER_PORT = 6065
+# HEADER and FOOTER are %-format templates, so every literal % in them has to
+# be doubled.  The one that was not cost every generated instance its error
+# reporting: `logging.exception("Simulation failed for %s", device.prefix)`
+# came out of the substitution as "Simulation failed for {'volume': 'sr06s'}",
+# because a bare %s takes the whole mapping.  That raises inside logging and
+# loses the device name at exactly the moment a device has failed.
 
 HEADER = '''#!/usr/bin/env -S uv run --script
 # /// script
@@ -101,6 +108,13 @@ import os
 # softioc is imported, rather than by a wrapper script, so that there is no way
 # to start this file on the real machine's port by forgetting something.
 #
+# The pvAccess ports are moved for the same reason.  This IOC serves no
+# pvAccess at all - iocInit is called with enable_pva=False at the bottom of
+# this file - but pythonSoftIOC would otherwise start a PVXS server beside the
+# Channel Access one, offering every PV below under the same name on the
+# standard port.  Moving the ports as well means that switching pvAccess back
+# on cannot put a simulated storage ring on 5075.
+#
 # setdefault, so the environment still wins and a second simulation can run
 # beside the first:
 #
@@ -108,6 +122,8 @@ import os
 #         ./%(instance)s
 os.environ.setdefault("EPICS_CA_SERVER_PORT", "%(serverPort)d")
 os.environ.setdefault("EPICS_CA_REPEATER_PORT", "%(repeaterPort)d")
+os.environ.setdefault("EPICS_PVAS_SERVER_PORT", "%(pvaPort)d")
+os.environ.setdefault("EPICS_PVAS_BROADCAST_PORT", "%(pvaBroadcast)d")
 
 import asyncio
 import logging
@@ -140,9 +156,14 @@ FOOTER = '''
 simulatedDevices = ([vacuum] + ionPumps + gaugeSets
                     + orderedGroups(vacuumGroups) + vacuumSpaces)
 
-# Boilerplate to get the IOC started
+# Boilerplate to get the IOC started.
+#
+# enable_pva=False because pythonSoftIOC would otherwise start a PVXS/QSRV2
+# server beside the Channel Access one, serving every record built above under
+# its own name on the standard pvAccess port - where a client looking for the
+# real machine would find it, whatever the Channel Access ports are set to.
 builder.LoadDatabase()
-softioc.iocInit(dispatcher)
+softioc.iocInit(dispatcher, enable_pva=False)
 
 
 async def simulate():
@@ -165,7 +186,7 @@ async def simulate():
                 # Say so, once per device, and keep the others going.
                 if device.prefix not in reported:
                     reported.add(device.prefix)
-                    logging.exception("Simulation failed for %s",
+                    logging.exception("Simulation failed for %%s",
                                       device.prefix)
 
 
@@ -328,6 +349,8 @@ def generate(declarations, iocName=None, instance=None):
         "instance": instance,
         "serverPort": CA_SERVER_PORT,
         "repeaterPort": CA_REPEATER_PORT,
+        "pvaPort": PVA_SERVER_PORT,
+        "pvaBroadcast": PVA_BROADCAST_PORT,
         "otherPort": CA_SERVER_PORT + 2,
         "otherRepeater": CA_REPEATER_PORT + 2,
         "report": _comment(
