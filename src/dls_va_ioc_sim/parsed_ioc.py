@@ -22,6 +22,7 @@ from .gauge_records import (
     pirgGroupRecord,
 )
 from .ion_pump_records import ionPumpGroupRecord, ionPumpRecord, mpcRecord
+from .rga_records import rgaRecord
 from .vacuum_space_records import spaceRecord
 
 # How often the simulated devices recalculate their readbacks.  One second
@@ -58,6 +59,7 @@ class parsedIoc:
         self.imgs = {}
         self.pirgs = {}
         self.valves = {}
+        self.rgas = {}
         self.groups = {}
         self.spaces = []
 
@@ -83,6 +85,9 @@ class parsedIoc:
 
         for prefix in declarations.valves:
             self.valves[prefix] = valveRecord(prefix)
+
+        for rga in declarations.rgas:
+            self.rgas[rga.prefix] = rgaRecord(rga.prefix)
 
         # declarations.groups is innermost first, which is what construction
         # needs - a group seeds its records from its members'.

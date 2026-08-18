@@ -12,6 +12,7 @@ import ast
 import os
 import re
 import stat
+import tomllib
 
 import pytest
 
@@ -32,6 +33,25 @@ from dls_va_ioc_sim.generate_ioc import (
 @pytest.fixture
 def declarations(cellXml):
     return parseXml(cellXml, cell="99")
+
+
+def scriptMetadata(source):
+    """The instance's PEP 723 block, parsed the way uv parses it.
+
+    Which is as TOML, after stripping the leading "# " off every line - so a
+    line of prose in there that is not *also* a TOML comment is a syntax error
+    that takes the whole header out and stops the file running at all.  Reading
+    it back through a real TOML parser is what catches that; eyeballing the
+    lines for a leading "#" does not, because they all have one.
+    """
+    lines = source.splitlines()
+    start = lines.index("# /// script")
+    end = lines.index("# ///", start)
+    body = "\n".join(
+        line[2:] if line.startswith("# ") else line[1:]
+        for line in lines[start + 1 : end]
+    )
+    return tomllib.loads(body)
 
 
 def test_the_instance_is_valid_python(declarations):
@@ -170,6 +190,55 @@ def test_an_unreleased_generator_does_not_pin_a_version_that_is_on_no_index(
 
     monkeypatch.setattr(generator, "__version__", "1.0.0b1")
     assert generator.requirement() == "dls-va-ioc-sim==1.0.0b1"
+
+
+def test_an_unreleased_generator_points_the_instance_at_its_own_checkout(
+    declarations, monkeypatch
+):
+    """Unpinned is not enough on its own: uv would fetch the last *release*,
+    which is exactly the copy without the unreleased work in it.  An instance
+    generated from a checkout named a class that release had never heard of and
+    died on the import - so the header has to say where the package came
+    from."""
+    import dls_va_ioc_sim.generate_ioc as generator
+
+    monkeypatch.setattr(generator, "__version__", "0.1.dev0+d20260811")
+    root = generator.projectRoot()
+    assert root is not None, "the tests run from a checkout"
+
+    source = generator.generate(declarations)
+
+    assert "# [tool.uv.sources]\n" in source
+    assert f'# dls-va-ioc-sim = {{ path = "{root}", editable = true }}\n' in source
+
+    metadata = scriptMetadata(source)
+    assert metadata["tool"]["uv"]["sources"]["dls-va-ioc-sim"] == {
+        "path": str(root),
+        "editable": True,
+    }
+    assert metadata["dependencies"] == ["dls-va-ioc-sim"]
+
+
+def test_a_released_generator_leaves_no_local_path_in_the_instance(
+    declarations, monkeypatch
+):
+    """The other side of it: an instance to deploy has to run on a machine
+    that has never seen the one it was generated on."""
+    import dls_va_ioc_sim.generate_ioc as generator
+
+    monkeypatch.setattr(generator, "__version__", "1.0.0b1")
+    source = generator.generate(declarations)
+
+    assert "[tool.uv.sources]" not in source
+    assert '# dependencies = ["dls-va-ioc-sim==1.0.0b1"]\n' in source
+
+    metadata = scriptMetadata(source)
+    assert metadata["dependencies"] == ["dls-va-ioc-sim==1.0.0b1"]
+    assert "tool" not in metadata
+    # The metadata block is the part that decides what gets installed, so it
+    # is the part that has to be free of this machine.  (The path of the XML
+    # it was generated from is quoted further down, and is only a comment.)
+    assert str(generator.projectRoot()) not in str(metadata)
 
 
 def test_the_instance_is_named_after_the_ioc_in_lower_case(declarations, tmp_path):

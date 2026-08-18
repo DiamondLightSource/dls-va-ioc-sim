@@ -11,6 +11,12 @@
 # it, so ./sr99c-va-ioc-01.py builds its own environment and starts the IOC in
 # it with nothing installed first.
 #
+# "The version that wrote it" is meant literally, including when that version
+# is a working tree: generated from a checkout, the header points the
+# dependency back at that checkout rather than at the index, because the
+# release on the index is precisely the copy without the unreleased work in
+# it.  See scriptSources.
+#
 # There used to be a shell script beside it - va-start-ioc, written by hand and
 # then generated - holding the pythonSoftIOC to exec and the ports to serve on.
 # Both of those now live in the instance, and pythonSoftIOC turns out to be
@@ -37,6 +43,7 @@
 import os
 import re
 import sys
+from pathlib import Path
 
 from ._version import __version__
 from .builder_xml import GROUP_KINDS, parseXml
@@ -52,7 +59,7 @@ FAMILY_NAMES = {
     "MPC": "mpc", "IONP": "ionp", "VALVE": "valve", "FVALV": "fvalve",
     "GCTLR": "gaugeSet", "GAUGE": "gauge", "IMG": "img", "PIRG": "pirg",
     "GIONP": "gionp", "GGAUG": "ggaug", "GIMG": "gimg", "GPIRG": "gpirg",
-    "GVALV": "gvalv", "SPACE": "space",
+    "GVALV": "gvalv", "SPACE": "space", "RGA": "rga",
 }
 
 # Group kind -> the class the generated file calls, and what it takes its
@@ -78,7 +85,7 @@ HEADER = '''#!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["%(requirement)s"]
-# ///
+%(sources)s# ///
 #
 # Simulation of the vacuum in %(what)s.
 #
@@ -137,6 +144,7 @@ from dls_va_ioc_sim.gauge_records import (gaugeGroupRecord, gaugeSetRecord,
                                          imgGroupRecord, pirgGroupRecord)
 from dls_va_ioc_sim.ion_pump_records import (ionPumpGroupRecord, ionPumpRecord,
                                            mpcRecord)
+from dls_va_ioc_sim.rga_records import rgaRecord
 from dls_va_ioc_sim.vacuum_model import gate, vacuumLayout, vacuumVolume
 from dls_va_ioc_sim.vacuum_space_records import spaceRecord
 
@@ -315,6 +323,10 @@ def layoutSource(declarations, naming=None):
     return "\n".join(lines), volumes
 
 
+PACKAGE_NAME = "dls-va-ioc-sim"
+PACKAGE = "dls_va_ioc_sim"
+
+
 def requirement():
     """The dependency a generated instance pins itself to, for its header.
 
@@ -322,12 +334,69 @@ def requirement():
     starts when the framework has moved on - except from a checkout, where
     setuptools_scm gives something like 0.1.dev0+d20260811 that is on no index
     at all.  Pinning that would write a file that cannot resolve, so an
-    unreleased generator asks for the package unpinned and whoever runs it
-    gets the latest release.
+    unreleased generator asks for the package unpinned - and then says where
+    to get it from, in scriptSources below.
     """
     if ".dev" in __version__ or "+" in __version__:
-        return "dls-va-ioc-sim"
-    return f"dls-va-ioc-sim=={__version__}"
+        return PACKAGE_NAME
+    return f"{PACKAGE_NAME}=={__version__}"
+
+
+def projectRoot():
+    """The source checkout this package is being run from, or None.
+
+    parents[2] of src/dls_va_ioc_sim/generate_ioc.py is the checkout root.  An
+    installed copy has site-packages there instead, with neither a pyproject
+    nor a src/ tree under it, which is what this looks for - an unreleased
+    version on its own is not the test, because a dev build can be installed
+    somewhere uv could not build from.
+    """
+    root = Path(__file__).resolve().parents[2]
+    if (root / "pyproject.toml").is_file() and (root / "src" / PACKAGE).is_dir():
+        return root
+    return None
+
+
+def scriptSources():
+    """The [tool.uv.sources] block a generated instance needs, if any.
+
+    An instance asks uv for dls-va-ioc-sim, and uv fetches it from the index -
+    which serves the last *release*.  Generated from a checkout carrying
+    unreleased work, that release is the one copy of the package without the
+    change in it, so the instance names classes it cannot build and dies on the
+    import before the IOC ever starts.  The fix is to say where the package
+    came from: uv reads [tool.uv.sources] out of the PEP 723 metadata just as
+    it would out of a pyproject, so the file the generator wrote runs against
+    the generator that wrote it.
+
+    Only from a checkout, and only when unreleased.  A released generator
+    writes a version off the index and nothing machine-specific in the file,
+    because that instance has to run on a machine that has never seen this one.
+    """
+    if requirement() != PACKAGE_NAME:
+        return ""
+    root = projectRoot()
+    if root is None:
+        return ""
+    # Every line here is doubly commented - "# # ..." - because the PEP 723
+    # block is TOML once uv has stripped the leading "# " off it, so a line of
+    # prose that is only commented once is parsed as TOML and is a syntax
+    # error.  That is not hypothetical: it took the whole header out.
+    return (
+        "#\n"
+        "# # Generated from a checkout, so the dependency above is *that\n"
+        "# # checkout* rather than a release off the index: the release does\n"
+        "# # not have whatever is unreleased in it, and an instance naming a\n"
+        "# # device class it has never heard of dies on the import.  editable,\n"
+        "# # so the working tree is picked up as it changes.\n"
+        "# #\n"
+        "# # This file is therefore only runnable where that path is.\n"
+        "# # Generate from a released dls-va-ioc-sim for an instance to deploy\n"
+        "# # - the header is then a version off the index and no local path.\n"
+        "#\n"
+        "# [tool.uv.sources]\n"
+        f'# {PACKAGE_NAME} = {{ path = "{root}", editable = true }}\n'
+    )
 
 
 def generate(declarations, iocName=None, instance=None):
@@ -346,6 +415,7 @@ def generate(declarations, iocName=None, instance=None):
         "what": ("%s - one storage ring cell" % (iocName or declarations.name)),
         "source": declarations.source,
         "requirement": requirement(),
+        "sources": scriptSources(),
         "instance": instance,
         "serverPort": CA_SERVER_PORT,
         "repeaterPort": CA_REPEATER_PORT,
@@ -430,6 +500,23 @@ def generate(declarations, iocName=None, instance=None):
 """)
     for prefix in declarations.valves:
         out.append(f'{naming.of(prefix)} = valveRecord("{prefix}")')
+
+    # --- RGAs ------------------------------------------------------------------
+    out.append("""
+# ---------------------------------------------------------------------------
+# RGAs
+#
+# rgaRecord only builds :STA - see its module docstring for why.  An RGA
+# takes no gas load and pumps nothing, so it is not part of the vacuum layout
+# below and needs no tick: :STA is set once, at construction.
+# ---------------------------------------------------------------------------
+""")
+    for rga in declarations.rgas:
+        out.append(f'{naming.of(rga.prefix)} = rgaRecord("{rga.prefix}")')
+    out.append("")
+    out.extend(_wrapped("rgas = [",
+                        [naming.of(rga.prefix) for rga in declarations.rgas],
+                        "]"))
 
     # --- the layout ----------------------------------------------------------
     layout, volumes = layoutSource(declarations, naming)

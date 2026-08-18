@@ -47,6 +47,7 @@ The framework, in `src/dls_va_ioc_sim/`:
 | `ion_pump_records.py` | Digitel MPC controllers, the ion pumps on them, and groups |
 | `gauge_records.py` | MKS 937B controllers, IMG/Pirani gauges, relays, and groups |
 | `fe_seq_records.py` | Valves, absorbers, shutters, their interlock chain, and groups |
+| `rga_records.py` | `rgamv2.template` - `:STA` only, nothing else of an RGA |
 | `vacuum_sim.py` | Shared helpers: pressure range, log-space slide, noise |
 | `builder_xml.py` | Reads a real IOC's builder XML. Plain data, **no records** |
 | `generate_ioc.py` | Writes an instance out as Python, from that. The way in |
@@ -333,10 +334,26 @@ sr99c-va-ioc-01.py` still works in an environment that already has the package.
   setuptools_scm version (`0.1.dev0+d20260811`) is on no index, so
   `requirement()` writes the dependency **unpinned** when the generator is
   unreleased — otherwise generating from a working tree would write a file that
-  cannot resolve. Note what that means when testing: `uv run --script` on an
-  instance generated from a checkout fetches the *released* package, not your
-  working tree. Use `python instance.py` in the project venv to exercise local
-  changes, or `dbdump`, which never leaves the process.
+  cannot resolve.
+- **Unpinned is not enough on its own, and `scriptSources()` is the rest of
+  it.** Unpinned still resolves off the index, which serves the last *release*
+  — precisely the copy without your unreleased work in it. An instance
+  generated from a checkout that had just grown `rga_records.py` died on
+  `ModuleNotFoundError: No module named 'dls_va_ioc_sim.rga_records'` before
+  the IOC started, and did so identically under `./instance.py` and `uv run
+  instance.py`, because uv reads the PEP 723 header and ignores the project
+  either way. So a generator running **from a checkout** writes a
+  `[tool.uv.sources]` entry pointing the dependency back at that checkout,
+  editable. A *released* generator writes a version off the index and no local
+  path, because that instance has to run on a machine that has never seen this
+  one.
+- **The PEP 723 block is TOML, not a comment block.** uv strips the leading
+  `# ` off each line and parses the rest, so a line of prose in there is a TOML
+  syntax error that takes the whole header out (`key with no value, expected
+  '='`) and the file will not run at all. Anything explanatory in there has to
+  be commented *twice* — `# # like this`. `tests/test_generate.py` parses the
+  block back with `tomllib` rather than checking the lines look like comments,
+  which is the only version of that check that catches this.
 - **The Channel Access ports are set in the instance**, at the top, before
   softioc is imported — `os.environ.setdefault("EPICS_CA_SERVER_PORT", "6064")`.
   In the shell script they were one forgotten wrapper away from 5064; in the

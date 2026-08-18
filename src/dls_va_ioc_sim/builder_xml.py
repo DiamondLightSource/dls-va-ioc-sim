@@ -23,6 +23,7 @@
 #   QPC.digitelQpc, QPC.digitelQpcIonp       mpcRecord, ionPumpRecord
 #   dlsPLC.NX102_vacValveDebounce            valveRecord
 #   dlsPLC.vacValveDebounce                  valveRecord
+#   rgamv2.rgamv2                            rgaRecord, :STA only
 #   digitelMpc.digitelMpcIonpGroup           ionPumpGroupRecord
 #   mks937{a,b}.mks937{a,b}GaugeGroup        gaugeGroupRecord
 #   mks937{a,b}.mks937{a,b}ImgGroup          imgGroupRecord
@@ -90,7 +91,6 @@ GROUP_KINDS = ("ionp", "gauge", "img", "pirg", "valve")
 IGNORED_TAGS = {
     "rga.rga": "no RGA class",
     "rga.rgaGroup": "no RGA class",
-    "rgamv2.rgamv2": "no RGA class",
     "mks937a.mks937aImgMean": "beam desorption average, not a space device",
     "mks937b.mks937bImgMean": "beam desorption average, not a space device",
     "mks937a.mks937aGaugeEGU": "an EGU conversion on a gauge already built",
@@ -217,6 +217,13 @@ class gaugeSetDeclaration:
         return [f"{self.dom}-VA-{family}-{id}" for id in self.ids()]
 
 
+class rgaDeclaration:
+    """One RGA head - rgamv2.rgamv2, built as rgaRecord's :STA only."""
+
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+
 class groupDeclaration:
     """One group: what kind, what is in it, and how long it staggers them."""
 
@@ -252,6 +259,7 @@ class xmlDeclarations:
         self.pumps = []                 # pumpDeclaration
         self.gaugeSets = []             # gaugeSetDeclaration
         self.valves = []                # prefixes
+        self.rgas = []                  # rgaDeclaration
         self.groups = []                # groupDeclaration, innermost first
         self.spaces = []                # spaceDeclaration
 
@@ -261,8 +269,8 @@ class xmlDeclarations:
     def __repr__(self):
         return (f"<xmlDeclarations {self.name}: {len(self.pumps)} pumps, "
                 f"{len(self.gaugeNames())} gauge pairs, "
-                f"{len(self.valves)} valves, {len(self.groups)} groups, "
-                f"{len(self.spaces)} spaces>")
+                f"{len(self.valves)} valves, {len(self.rgas)} RGAs, "
+                f"{len(self.groups)} groups, {len(self.spaces)} spaces>")
 
     # -- what the XML declared ------------------------------------------------
 
@@ -319,6 +327,7 @@ class xmlDeclarations:
                  f"           {len(self.gaugeNames())} gauge pairs on "
                  f"{len(self.gaugeSets)} controllers",
                  f"           {len(self.valves)} valves, "
+                 f"{len(self.rgas)} RGAs, "
                  f"{len(self.groups)} groups, {len(self.spaces)} spaces"]
         if self.dropped:
             lines.append("  dropped")
@@ -387,6 +396,8 @@ def parseXml(path, cell=None):
     for element in root:
         if element.tag in VALVE_TAGS:
             declarations.valves.append(device(element))
+        elif element.tag == "rgamv2.rgamv2":
+            declarations.rgas.append(rgaDeclaration(device(element)))
 
     _parseGroups(declarations, root, cell)
     _parseSpaces(declarations, root, cell, device)
@@ -395,7 +406,7 @@ def parseXml(path, cell=None):
                   | set(PIRG_TAGS) | set(VALVE_TAGS) | set(GROUP_TAGS)
                   | {"digitelMpc.digitelMpc", "digitelMpc.digitelMpcIonp",
                      "QPC.digitelQpc", "QPC.digitelQpcIonp",
-                     "vacuumSpace.spaceTemplate"})
+                     "vacuumSpace.spaceTemplate", "rgamv2.rgamv2"})
     for element in root:
         if element.tag in translated:
             continue
