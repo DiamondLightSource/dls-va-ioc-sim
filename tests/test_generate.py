@@ -150,7 +150,9 @@ def test_the_tick_loop_can_say_which_device_failed(declarations):
     moment a device has failed and every readback has frozen."""
     source = generate(declarations)
 
-    message = re.search(r'logging\.exception\("([^"]*)"', source).group(1)
+    logged = re.search(r'logging\.exception\("([^"]*)"', source)
+    assert logged, "the tick loop has to log the device that failed"
+    message = logged.group(1)
 
     # Formatted the way logging formats it: msg % args, args being a tuple.
     assert message % ("SR99A-VA-IONP-01",) == "Simulation failed for SR99A-VA-IONP-01"

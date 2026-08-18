@@ -561,7 +561,12 @@ sets its own port, so it needs only the two `EPICS_CAS_*` lines above.
   serialises every valve underneath it, and while those `time.sleep` calls run the
   tick loop is stopped, so gauges and pumps freeze too. A test that reads three
   seconds after a group open will see half-finished transitions and stale
-  everything else.
+  everything else. **Drive the valves one at a time unless the group is what is
+  under test** — a group write also queues the `always_update` re-entry below
+  it, and a handful of them in a row left the simulation unresponsive for over
+  90 seconds, which is indistinguishable from a dead IOC. The same four valves
+  driven individually were instant, and are what the space alarms were
+  confirmed with.
 
 ## Conventions and standing decisions
 
