@@ -478,6 +478,17 @@ uv run dls-va-ioc-sim dbdump sr99c-va-ioc-01.py after.db
 diff before.db after.db
 ```
 
+**A database diff cannot see alarm severity.** It is run-time state: the fields
+that raise an alarm are in the dump, but what a record is actually publishing
+never is, and a change that dropped every severity would diff clean. That half
+is checked by `tests/test_space.py`, which builds one space over stub groups in
+a subprocess and reads the value, severity and alarm status back off the record
+— and by driving a running IOC over Channel Access, which is how the space
+alarms were confirmed end to end: closing one valve takes `SPACE-01:STA` to 4
+with `sevr=MAJOR stat=LINK` and opening it again clears it, stopping the pumps
+gives 2 MINOR, and leaving them off until the section is over 1e-7 gives 10,
+with `:P` itself MINOR on its own HIGH.
+
 Two of the tests do exactly this and are the regression net: `test_instance.py`
 dumps the same instance twice and asserts the databases match, and dumps again
 after regenerating from the XML. Neither asserts a record *count*, for the
@@ -570,6 +581,18 @@ sets its own port, so it needs only the two `EPICS_CAS_*` lines above.
   with `severity=alarm.INVALID_ALARM, alarm=alarm.DISABLE_ALARM`. A gauge with its HV
   off must not leak a pressure it cannot know. Likewise an ion pump with its supply
   off reads `:P` = 0 — an MPC derives pressure from discharge current and has none.
+- **Alarm severity is half the interface, and it has to be carried by hand.** A
+  screen colours a lamp on a record's *severity*, not on its value, so an alarm
+  that stops climbing leaves a synoptic green while a valve underneath it is
+  shut. The templates get this for nothing: a limit field raises the alarm and
+  every link above it carries `MS`, which is `recGblSetSevr` and only ever
+  raises. There are no links here, so a device that aggregates has to work out
+  what the records below it would have raised and publish the worst of them
+  itself — `.set(value, severity=…, alarm=…)`, with `alarm.LINK_ALARM` as the
+  status, because that is what an `MS` link records on the real IOC. See
+  `spaceRecord.statusSeverity()`; the `alarmLimit` objects beside it hold each
+  limit once and hand it to both the record's fields and the Python that has to
+  agree with them.
 - **Slide pressures in log space** (`vacuumSim.slideLog`). Vacuum covers decades and
   a linear approach spends all its time in the top decade, then appears to stop.
 - **Keep deliberate template infidelities, with a comment saying so.** An ion pump's
