@@ -14,6 +14,7 @@ devices after it in the list have to keep being stepped.
 
 import asyncio
 import contextlib
+import inspect
 import logging
 
 import pytest
@@ -250,7 +251,10 @@ def test_the_dispatcher_is_given_a_coroutine_function(startedIoc):
     runSimulation([], interactive=False)
 
     (simulate,) = startedIoc["dispatched"]
-    assert asyncio.iscoroutinefunction(simulate)
+    # inspect, not asyncio: asyncio.iscoroutinefunction is deprecated from
+    # 3.12 and warnings are errors here, so the asyncio one fails the test it
+    # is meant to be making.
+    assert inspect.iscoroutinefunction(simulate)
     assert not simulate.__code__.co_argcount
 
     # ...and it really is the tick loop, not something that returns at once.
