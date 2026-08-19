@@ -11,32 +11,19 @@
 #                    would rather read its XML at start up than be generated.
 #
 # Keeping the parse free of records is what stops those two disagreeing: there
-# is one statement of what an XML means, and both go through it.
+# is one statement of what an XML means, and both go through it.  This module
+# imports no record class and builds no record - what it hands back is plain
+# data, and device_registry is where a tag is given its meaning.
 #
-# What is parsed, and what it becomes:
-#
-#   SR-VA.gaugeSet, SR-VA.gaugeSetA          gaugeSetRecord
-#   mks937{a,b}.mks937{a,b}                  gaugeSetRecord, paired up from
-#     + .mks937aImg + .mks937aPirg           the IMG and PIRG declarations
-#   digitelMpc.digitelMpc                    mpcRecord
-#   digitelMpc.digitelMpcIonp                ionPumpRecord
-#   QPC.digitelQpc, QPC.digitelQpcIonp       mpcRecord, ionPumpRecord
-#   dlsPLC.NX102_vacValveDebounce            valveRecord
-#   dlsPLC.vacValveDebounce                  valveRecord
-#   rgamv2.rgamv2                            rgaRecord, :STA only
-#   ether_ip.EtherIPInit                     plcInfoRecord, the PLC's own health
-#   SR-VA.common                             commonRecord, the cell's rack
-#   SR-VA.commonD2                           commonD2Record, the same in D2
-#   digitelMpc.digitelMpcIonpGroup           ionPumpGroupRecord
-#   mks937{a,b}.mks937{a,b}GaugeGroup        gaugeGroupRecord
-#   mks937{a,b}.mks937{a,b}ImgGroup          imgGroupRecord
-#   mks937{a,b}.mks937{a,b}PirgGroup         pirgGroupRecord
-#   dlsPLC.vacValveGroup                     valveGroupRecord
-#   vacuumSpace.spaceTemplate                spaceRecord
+# **What is parsed, and what it becomes, is device_registry.py.**  That table
+# is read here rather than restated, so a template added there is parsed here
+# with nothing to edit in this file.  The three shapes it distinguishes -
+# devices that are one line of XML, groups over them, and the few that need a
+# parser of their own - are the three shapes this module has parsers for.
 #
 # Everything else is ignored and counted, and `report()` says what was ignored
 # and why.  That is deliberate: an XML carries terminal servers, autosave,
-# RGAs, the fast vacuum system and a great deal of PLC glue, none of which this
+# the fast vacuum system and a great deal of PLC glue, none of which this
 # framework has a class for and none of which a vacuum simulation needs.  A tag
 # this does not know about can never silently change what is built - it is
 # either translated or listed, and one it has never seen says NOT RECOGNISED.
@@ -59,98 +46,29 @@
 import os
 import re
 import xml.etree.ElementTree as elementTree
+from dataclasses import dataclass, field
+
+from .device_registry import (
+    CONTROLLER_TAGS,
+    DEVICE_BY_TAG,
+    DEVICES,
+    GAUGE_SET_TAGS,
+    GROUP_BY_TAG,
+    GROUP_KINDS,
+    IGNORED_MODULES,
+    IGNORED_TAGS,
+    IMG_TAGS,
+    MPC_TAGS,
+    PIRG_TAGS,
+    PUMP_TAGS,
+    SPACE_TAGS,
+    TRANSLATED_TAGS,
+)
 
 # A device name starts with a two or three letter machine area and a two digit
 # cell - SR03S, FE03I, BL03I.  Only the digits are rewritten, so that a
 # simulation of SR03C comes up as SR99C and cannot be mistaken for the real one.
 CELL_PATTERN = re.compile(r"^([A-Z]{2,3})(\d{2})")
-
-# The tags each family is declared under.  mks937a and mks937b are listed
-# together throughout: see the note at the top of the file.
-GAUGE_SET_TAGS = ("SR-VA.gaugeSet", "SR-VA.gaugeSetA")
-CONTROLLER_TAGS = ("mks937a.mks937a", "mks937b.mks937b")
-IMG_TAGS = ("mks937a.mks937aImg", "mks937b.mks937bImg")
-PIRG_TAGS = ("mks937a.mks937aPirg", "mks937b.mks937bPirg")
-VALVE_TAGS = ("dlsPLC.NX102_vacValveDebounce", "dlsPLC.vacValveDebounce")
-
-# A cell's rack, and which of SR-VA's two files declares it.  commonD2.xml is
-# replacing common.xml cell by cell, so both have to be read for as long as
-# both are in use; the kind is what the generator picks a class by.
-COMMON_TAGS = {
-    "SR-VA.common": "common",
-    "SR-VA.commonD2": "commonD2",
-}
-
-# Group tag -> (kind, the prefix its member attributes use).  The kind is what
-# the rest of this module and the generator index everything by.
-GROUP_TAGS = {
-    "digitelMpc.digitelMpcIonpGroup": ("ionp", "ionp"),
-    "mks937a.mks937aGaugeGroup": ("gauge", "gauge"),
-    "mks937b.mks937bGaugeGroup": ("gauge", "gauge"),
-    "mks937a.mks937aImgGroup": ("img", "img"),
-    "mks937b.mks937bImgGroup": ("img", "img"),
-    "mks937a.mks937aPirgGroup": ("pirg", "pirg"),
-    "mks937b.mks937bPirgGroup": ("pirg", "pirg"),
-    "dlsPLC.vacValveGroup": ("valve", "valve"),
-}
-
-GROUP_KINDS = ("ionp", "gauge", "img", "pirg", "valve")
-
-# Tags that are known about and deliberately not built, with the reason
-# report() gives for each.  Anything not in here and not translated is
-# reported as unrecognised, which is the thing worth looking at.
-IGNORED_TAGS = {
-    "rga.rga": "no RGA class",
-    "rga.rgaGroup": "no RGA class",
-    "mks937a.mks937aImgMean": "beam desorption average, not a space device",
-    "mks937b.mks937bImgMean": "beam desorption average, not a space device",
-    "mks937a.mks937aGaugeEGU": "an EGU conversion on a gauge already built",
-    "mks937a.auto_mks937aPlogADC": "an EGU conversion on a gauge already built",
-    # A gauge read straight off an ADC rather than off a controller, in the
-    # oldest cells.  There is no IMG/PIRG pair behind it, so there is nothing
-    # for gaugeRecord to combine - any group whose only member is one of these
-    # is dropped, and says so.
-    "mks937a.mks937aGauge": "an analogue input gauge, with no IMG/PIRG pair",
-    "digitelMpc.digitelMpcTsp": "no TSP class",
-    "digitelMpc.digitelMpcTspGroup": "no TSP class",
-    "dlsPLC.fastVacuumMaster": "fast vacuum detection, no class",
-    "dlsPLC.fastVacuumChannel": "fast vacuum detection, no class",
-    "FastVacuum.Master16": "fast vacuum detection, no class",
-    "FastVacuum.auto_Channel16": "fast vacuum detection, no class",
-    "FastVacuum.auto_ChannelUn": "fast vacuum detection, no class",
-    "dlsPLC.NX102_interlock": "PLC glue, no PLC here",
-    "dlsPLC.NX102_readBool": "PLC glue, no PLC here",
-    "dlsPLC.NX102_readReal": "PLC glue, no PLC here",
-    "dlsPLC.NX102_digitalIn": "PLC glue, no PLC here",
-    "dlsPLC.NX102_powerSupply": "PLC glue, no PLC here",
-    "dlsPLC.NX102_controller_status": "PLC glue, no PLC here",
-    "dlsPLC.NX102_IRVacuum": "PLC glue, no PLC here",
-    "dlsPLC.read100": "PLC glue, no PLC here",
-    "dlsPLC.auto_dlsPLC_CommsStatus": "PLC glue, no PLC here",
-    "FINS.FINSUDPInit": "a link to hardware that is not here",
-    "FINS.FINSHostlink": "a link to hardware that is not here",
-    "FINS.FINSTemplate": "a link to hardware that is not here",
-    "asyn.AsynIP": "a link to hardware that is not here",
-    "asyn.AsynSerial": "a link to hardware that is not here",
-    "terminalServer.Moxa": "a link to hardware that is not here",
-    "SR-VA.auto_psu24vStatus": "IOC and rack housekeeping",
-    "SR-VA.auto_ecatDuplexPSUStatus": "IOC and rack housekeeping",
-    "rackFan.rackFan": "IOC and rack housekeeping",
-    "userIO.bi": "IOC and rack housekeeping",
-    "autosave.Autosave": "IOC and rack housekeeping",
-    "pvlogging.PvLogging": "IOC and rack housekeeping",
-    "devIocStats.devIocStatsHelper": "IOC and rack housekeeping",
-    "IOCinfo.IOCinfo": "IOC and rack housekeeping",
-    "EPICS_BASE.EpicsEnvSet": "IOC and rack housekeeping",
-    "EPICS_BASE.StartupCommand": "IOC and rack housekeeping",
-    "records.ao": "a field override on a record already built",
-}
-
-# Whole modules that are never anything to do with vacuum.  Matched on the part
-# before the dot, so a new template from one of them is ignored quietly rather
-# than turning up as unrecognised.
-IGNORED_MODULES = ("ethercat", "ipac", "Hy8401ip", "Hy8414", "DLS8515",
-                   "mrfTiming", "TimingTemplates")
 
 # What a volume with no better information is given.  A pressure of 7e-10 mbar
 # is where a storage ring arc sits, and gasLoad / speed is what sets it, so a
@@ -185,34 +103,34 @@ def _number(value, default):
         return default
 
 
+@dataclass
 class controllerDeclaration:
     """A Digitel MPC or a QPC, and the builder name the XML refers to it by."""
 
-    def __init__(self, prefix, builderName):
-        self.prefix = prefix
-        self.builderName = builderName
+    prefix: str
+    builderName: str
 
 
+@dataclass
 class pumpDeclaration:
     """One ion pump supply: which controller, which slot, how big."""
 
-    def __init__(self, prefix, controller, pump, size, strapping, setpoints):
-        self.prefix = prefix
-        self.controller = controller        # a controller prefix
-        self.pump = pump
-        self.size = size
-        self.strapping = strapping
-        self.setpoints = setpoints          # sp1on / sp1off / sp2on / sp2off
+    prefix: str
+    controller: str                     # a controller prefix
+    pump: int
+    size: int
+    strapping: int
+    setpoints: dict                     # sp1on / sp1off / sp2on / sp2off
 
 
+@dataclass
 class gaugeSetDeclaration:
     """One 937B controller and the one or two gauge pairs fitted to it."""
 
-    def __init__(self, dom, setNumber, idA, idB=None):
-        self.dom = dom
-        self.setNumber = setNumber
-        self.idA = idA
-        self.idB = idB
+    dom: str
+    setNumber: str
+    idA: str
+    idB: str | None = None
 
     @property
     def prefix(self):
@@ -226,55 +144,47 @@ class gaugeSetDeclaration:
         return [f"{self.dom}-VA-{family}-{id}" for id in self.ids()]
 
 
-class rgaDeclaration:
-    """One RGA head - rgamv2.rgamv2, built as rgaRecord's :STA only."""
+@dataclass
+class deviceDeclaration:
+    """One device that is one element of XML - a device_registry.deviceTemplate.
 
-    def __init__(self, prefix):
-        self.prefix = prefix
+    Everything one of these carries is its name and which template declared it:
+    a valve, an RGA head, the PLC behind an EtherIP port and a whole cell's
+    rack are all one line of XML with one name in it, and the kind is what says
+    which class builds it.  The name comes from whichever attribute the
+    template names - `device` for almost everything, `dom` for a rack, which is
+    the domain every device in that rack is named after.
 
+    A template that needs more than a name needs a declaration of its own, the
+    way an ion pump supply or a gauge set does.
 
-class plcDeclaration:
-    """The PLC behind an EtherIP port - ether_ip.EtherIPInit.
-
-    The port and the IP address it names are a link to hardware that is not
-    here and are not kept; the device name is, because the driver publishes
-    the link's own health on it and the screens read that.
+    `arguments` are the template's macros, and only the ones the cell actually
+    quoted: `commonD2.xml` writes its RGA power cycle lines through
+    `$(straight1)` and friends, and a cell that names one is honoured while a
+    cell that names none gets the record class's own defaults.
     """
 
-    def __init__(self, prefix):
-        self.prefix = prefix
+    prefix: str
+    kind: str
+    arguments: dict = field(default_factory=dict)
 
 
-class commonDeclaration:
-    """A cell's rack and PLC housekeeping - SR-VA.common or SR-VA.commonD2.
-
-    One line of XML that expands to the whole of SR-VA's common.xml, so the
-    domain is all it carries: every device in it is named after the cell.  The
-    kind says which of the two files it was - they differ only in which RGA
-    heads the PLC has a power cycle line to.
-    """
-
-    def __init__(self, dom, kind="common"):
-        self.dom = dom
-        self.kind = kind
-
-
+@dataclass
 class groupDeclaration:
     """One group: what kind, what is in it, and how long it staggers them."""
 
-    def __init__(self, prefix, kind, members, delay):
-        self.prefix = prefix
-        self.kind = kind
-        self.members = members              # device or group prefixes
-        self.delay = delay
+    prefix: str
+    kind: str
+    members: list                       # device or group prefixes
+    delay: float
 
 
+@dataclass
 class spaceDeclaration:
     """One vacuum space and the five groups it reads and writes."""
 
-    def __init__(self, prefix, groups):
-        self.prefix = prefix
-        self.groups = groups                # kind -> group prefix
+    prefix: str
+    groups: dict                        # kind -> group prefix
 
 
 class xmlDeclarations:
@@ -293,10 +203,7 @@ class xmlDeclarations:
         self.controllers = []           # controllerDeclaration
         self.pumps = []                 # pumpDeclaration
         self.gaugeSets = []             # gaugeSetDeclaration
-        self.valves = []                # prefixes
-        self.rgas = []                  # rgaDeclaration
-        self.plcs = []                  # plcDeclaration
-        self.commons = []               # commonDeclaration
+        self.devices = []               # deviceDeclaration, every simple kind
         self.groups = []                # groupDeclaration, innermost first
         self.spaces = []                # spaceDeclaration
 
@@ -306,10 +213,21 @@ class xmlDeclarations:
     def __repr__(self):
         return (f"<xmlDeclarations {self.name}: {len(self.pumps)} pumps, "
                 f"{len(self.gaugeNames())} gauge pairs, "
-                f"{len(self.valves)} valves, {len(self.rgas)} RGAs, "
+                f"{len(self.valves)} valves, "
+                f"{len(self.devicesOfKind('rga'))} RGAs, "
                 f"{len(self.groups)} groups, {len(self.spaces)} spaces>")
 
     # -- what the XML declared ------------------------------------------------
+
+    def devicesOfKind(self, *kinds):
+        """Every simple device of one or more registry kinds, in XML order."""
+        wanted = set(kinds)
+        return [device for device in self.devices if device.kind in wanted]
+
+    @property
+    def valves(self):
+        """The valves, which the vacuum layout has to decide the topology of."""
+        return self.devicesOfKind("valve")
 
     def pumpNames(self):
         return [pump.prefix for pump in self.pumps]
@@ -356,18 +274,32 @@ class xmlDeclarations:
         return sorted(tag for tag, (_, reason) in self.ignored.items()
                       if reason == UNRECOGNISED)
 
+    def deviceCounts(self):
+        """How many of each labelled kind, in the order the registry lists them.
+
+        Two kinds sharing a label are counted together, which is what the two
+        rack files do: a cell has one rack whichever of them declared it.
+        """
+        counts = {}
+        for template in DEVICES:
+            counts.setdefault(template.label, 0)
+            counts[template.label] += len(self.devicesOfKind(template.kind))
+        return counts
+
     def report(self):
         """What this found, what it skipped, and what it did not recognise."""
+        # The devices line is built from the registry rather than written out,
+        # so a template added there is reported here with nothing to edit.
+        devices = ", ".join(f"{count} {label}"
+                            for label, count in self.deviceCounts().items())
         lines = [f"{self.name}  (from {self.source})",
                  f"  found    {len(self.pumps)} ion pumps on "
                  f"{len(self.controllers)} controllers",
                  f"           {len(self.gaugeNames())} gauge pairs on "
                  f"{len(self.gaugeSets)} controllers",
-                 f"           {len(self.valves)} valves, "
-                 f"{len(self.rgas)} RGAs, "
-                 f"{len(self.groups)} groups, {len(self.spaces)} spaces",
-                 f"           {len(self.plcs)} PLCs, "
-                 f"{len(self.commons)} racks"]
+                 f"           {len(self.groups)} groups, "
+                 f"{len(self.spaces)} spaces",
+                 f"           {devices}"]
         if self.dropped:
             lines.append("  dropped")
             for what, why in self.dropped:
@@ -418,7 +350,7 @@ def parseXml(path, cell=None):
     gaugeControllerByName = {}
 
     for element in root:
-        if element.tag in ("digitelMpc.digitelMpc", "QPC.digitelQpc"):
+        if element.tag in MPC_TAGS:
             # A QPC names its device in QPC=, an MPC in device=.
             prefix = device(element,
                             "QPC" if element.tag.startswith("QPC") else "device")
@@ -432,30 +364,30 @@ def parseXml(path, cell=None):
     _parsePumps(declarations, root, cell, mpcByName, device)
     _parseGauges(declarations, root, cell, gaugeControllerByName)
 
+    # Every template that is one element of XML and one device, off the
+    # registry.  Adding one there is all it takes to be read here.
     for element in root:
-        if element.tag in VALVE_TAGS:
-            declarations.valves.append(device(element))
-        elif element.tag == "rgamv2.rgamv2":
-            declarations.rgas.append(rgaDeclaration(device(element)))
-        elif element.tag == "ether_ip.EtherIPInit":
-            declarations.plcs.append(plcDeclaration(device(element)))
-        elif element.tag in COMMON_TAGS:
-            declarations.commons.append(
-                commonDeclaration(device(element, "dom"),
-                                  kind=COMMON_TAGS[element.tag]))
+        template = DEVICE_BY_TAG.get(element.tag)
+        if template is not None:
+            # Only the macros this cell actually quoted, so that a cell which
+            # quotes none gets the record class's defaults rather than a set of
+            # empty strings.  Not cell-renamed: a macro value is a domain
+            # letter or a tag name, not a device name.
+            macros = {name: element.get(name) for name in template.macros
+                      if element.get(name)}
+            declarations.devices.append(deviceDeclaration(
+                device(element, template.attribute), template.kind, macros))
 
     _parseGroups(declarations, root, cell)
     _parseSpaces(declarations, root, cell, device)
 
-    translated = (set(GAUGE_SET_TAGS) | set(CONTROLLER_TAGS) | set(IMG_TAGS)
-                  | set(PIRG_TAGS) | set(VALVE_TAGS) | set(GROUP_TAGS)
-                  | {"digitelMpc.digitelMpc", "digitelMpc.digitelMpcIonp",
-                     "QPC.digitelQpc", "QPC.digitelQpcIonp",
-                     "vacuumSpace.spaceTemplate", "rgamv2.rgamv2",
-                     "ether_ip.EtherIPInit"}
-                  | set(COMMON_TAGS))
+    # TRANSLATED_TAGS is derived from the registry, so it cannot disagree with
+    # what the branches above actually handle.  Written out by hand, it could:
+    # a tag parsed but left out of the set was built *and* reported NOT
+    # RECOGNISED, and one in the set with no branch behind it was dropped in
+    # silence, which is the failure this whole report exists to prevent.
     for element in root:
-        if element.tag in translated:
+        if element.tag in TRANSLATED_TAGS:
             continue
         if element.tag in IGNORED_TAGS:
             ignore(element.tag, IGNORED_TAGS[element.tag])
@@ -473,15 +405,9 @@ def _parsePumps(declarations, root, cell, mpcByName, device):
     Order matters: a controller numbers its supplies as they are declared.
     """
     for element in root:
-        if element.tag == "digitelMpc.digitelMpcIonp":
-            controllerName, pump = element.get("MPC"), element.get("pump")
-            size = _number(element.get("size"), 500.0)
-            setpoints = {
-                "sp1on": _number(element.get("sp1on"), 1.0e-7),
-                "sp1off": _number(element.get("sp1off"), 2.0e-7),
-                "sp2on": _number(element.get("sp2on"), 1.0e-7),
-                "sp2off": _number(element.get("sp2off"), 2.0e-7)}
-        elif element.tag == "QPC.digitelQpcIonp":
+        if element.tag not in PUMP_TAGS:
+            continue
+        if element.tag.startswith("QPC"):
             # A QPC calls the same things by different names, and quotes one
             # setpoint pair rather than two.
             controllerName, pump = element.get("QPC"), element.get("SPLY")
@@ -490,7 +416,13 @@ def _parsePumps(declarations, root, cell, mpcByName, device):
             off = _number(element.get("spoff"), 2.0e-7)
             setpoints = {"sp1on": on, "sp1off": off, "sp2on": on, "sp2off": off}
         else:
-            continue
+            controllerName, pump = element.get("MPC"), element.get("pump")
+            size = _number(element.get("size"), 500.0)
+            setpoints = {
+                "sp1on": _number(element.get("sp1on"), 1.0e-7),
+                "sp1off": _number(element.get("sp1off"), 2.0e-7),
+                "sp2on": _number(element.get("sp2on"), 1.0e-7),
+                "sp2off": _number(element.get("sp2off"), 2.0e-7)}
 
         controller = mpcByName.get(controllerName)
         if controller is None:
@@ -585,25 +517,25 @@ def _parseGroups(declarations, root, cell):
     declared = {}       # prefix -> groupDeclaration, unresolved members
     order = []
     for element in root:
-        if element.tag not in GROUP_TAGS:
+        template = GROUP_BY_TAG.get(element.tag)
+        if template is None:
             continue
-        kind, attribute = GROUP_TAGS[element.tag]
         prefix = renameCell(element.get("device", ""), cell)
         members = _distinct(
-            renameCell(element.get(f"{attribute}{slot}", ""), cell)
+            renameCell(element.get(template.slotName(slot), ""), cell)
             for slot in range(1, 9))
-        declared[prefix] = groupDeclaration(prefix, kind, members,
+        declared[prefix] = groupDeclaration(prefix, template.kind, members,
                                             _number(element.get("delay"), 0.0))
         order.append(prefix)
 
-    # The devices a group of each kind can draw its members from.
+    # The devices a group of each kind can draw its members from.  The three
+    # gauge kinds name the family the controller creates them under - a gauge
+    # group's members are its GAUGEs, an img group's its IMGs.
     own = {"ionp": set(declarations.pumpNames()),
-           "valve": set(declarations.valves),
-           "gauge": set(), "img": set(), "pirg": set()}
-    for gaugeSet in declarations.gaugeSets:
-        own["gauge"].update(gaugeSet.deviceNames("GAUGE"))
-        own["img"].update(gaugeSet.deviceNames("IMG"))
-        own["pirg"].update(gaugeSet.deviceNames("PIRG"))
+           "valve": {valve.prefix for valve in declarations.valves}}
+    for kind in ("gauge", "img", "pirg"):
+        own[kind] = {name for gaugeSet in declarations.gaugeSets
+                     for name in gaugeSet.deviceNames(kind.upper())}
 
     resolved = {}
     building = set()
@@ -643,7 +575,7 @@ def _parseGroups(declarations, root, cell):
 def _parseSpaces(declarations, root, cell, device):
     built = {group.prefix for group in declarations.groups}
     for element in root:
-        if element.tag != "vacuumSpace.spaceTemplate":
+        if element.tag not in SPACE_TAGS:
             continue
         prefix = device(element)
         groups = {kind: renameCell(element.get(kind, ""), cell)

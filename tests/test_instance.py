@@ -14,6 +14,7 @@ anyone adds a device.
 """
 
 import os
+import re
 import subprocess
 import sys
 
@@ -90,6 +91,42 @@ def test_a_diamond_two_cell_builds_its_own_rack_and_its_rga_heads(d2CellXml, tmp
 
     # The pre-D2 heads are not built for a D2 cell.
     assert "SR99A-VA-RGA-02:PWRC" not in text
+
+
+def test_the_power_cycle_lines_land_on_heads_the_cell_declares(d2CellXml, tmp_path):
+    """The check on the Diamond-II macro defaults, taken off the cell itself.
+
+    `common.xml` writes its three RGA power cycle devices in full, so what
+    `commonRecord` builds is a fact.  `commonD2.xml` writes them through
+    `$(straight1)`, `$(girder1)` and `$(girder2)`, which the cell XML does not
+    quote - they come from the builder class it expands through, and what
+    `commonD2Record` defaults them to is a statement about that class.
+
+    A wrong default is invisible: it builds three perfectly good records for
+    heads that do not exist, on a screen that then shows three dead buttons.
+    So rather than assert the names this framework chose, assert that every
+    `:PWRC` it built belongs to an RGA head *the same XML declares*.
+    """
+    from dls_va_ioc_sim.builder_xml import parseXml
+
+    declared = {
+        rga.prefix for rga in parseXml(d2CellXml, cell="99").devicesOfKind("rga")
+    }
+    assert declared, "the D2 fixture should declare rgamv2 heads"
+
+    cli("generate", str(d2CellXml), "99", cwd=tmp_path)
+    database = tmp_path / "heads.db"
+    cli("dbdump", "sr99c-va-ioc-01-d2.py", str(database), cwd=tmp_path)
+
+    powerCycled = set(re.findall(r'record\(ao, "(\S+):PWRC"\)', database.read_text()))
+
+    assert powerCycled, "a D2 rack should build power cycle lines"
+    assert powerCycled <= declared, (
+        "the rack drives heads this cell does not declare: "
+        + ", ".join(sorted(powerCycled - declared))
+        + " - the $(straight1)/$(girder1)/$(girder2) defaults in rack_records "
+        "disagree with the builder class"
+    )
 
 
 def test_the_database_is_the_same_every_time(generated, tmp_path):

@@ -6,42 +6,13 @@
 # instance that stays three lines long and re-reads its XML every time it
 # starts.  Both go through builder_xml.parseXml, so neither can drift.
 
-import asyncio
-import logging
-
-from softioc import asyncio_dispatcher, builder, softioc
-
 from .builder_xml import attachLayout, parseXml
 from .device_groups import orderedGroups
-from .epics_ports import setPortDefaults
-from .fe_seq_records import valveGroupRecord, valveRecord
-from .gauge_records import (
-    gaugeGroupRecord,
-    gaugeSetRecord,
-    imgGroupRecord,
-    pirgGroupRecord,
-)
-from .ion_pump_records import ionPumpGroupRecord, ionPumpRecord, mpcRecord
-from .rack_records import commonD2Record, commonRecord, plcInfoRecord
-from .rga_records import rgaRecord
+from .device_registry import DEVICE_BY_KIND, GROUP_BY_KIND
+from .gauge_records import gaugeSetRecord
+from .ion_pump_records import ionPumpRecord, mpcRecord
+from .simulation_loop import SIMULATION_PERIOD, runSimulation
 from .vacuum_space_records import spaceRecord
-
-# How often the simulated devices recalculate their readbacks.  One second
-# matches the SCAN rate the real templates poll their hardware at.
-SIMULATION_PERIOD = 1.0
-
-COMMON_CLASSES = {
-    "common": commonRecord,
-    "commonD2": commonD2Record,
-}
-
-GROUP_CLASSES = {
-    "ionp": ionPumpGroupRecord,
-    "gauge": gaugeGroupRecord,
-    "img": imgGroupRecord,
-    "pirg": pirgGroupRecord,
-    "valve": valveGroupRecord,
-}
 
 
 class parsedIoc:
@@ -64,10 +35,11 @@ class parsedIoc:
         self.gauges = {}
         self.imgs = {}
         self.pirgs = {}
-        self.valves = {}
-        self.rgas = {}
-        self.plcs = {}
-        self.racks = {}
+        # Every simple device, by registry kind then by prefix: valves, RGA
+        # heads, the PLC link, the cell's rack.  `devicesOfKind` below is how
+        # anything gets at one, and a kind with none declared is an empty dict
+        # rather than a missing key.
+        self.devices = {template.kind: {} for template in DEVICE_BY_KIND.values()}
         self.groups = {}
         self.spaces = []
 
@@ -91,19 +63,14 @@ class parsedIoc:
                 self.imgs[gauge.img.prefix] = gauge.img
                 self.pirgs[gauge.pirg.prefix] = gauge.pirg
 
-        for prefix in declarations.valves:
-            self.valves[prefix] = valveRecord(prefix)
-
-        for rga in declarations.rgas:
-            self.rgas[rga.prefix] = rgaRecord(rga.prefix)
-
-        # The rack and the PLC: not vacuum devices, on no volume and on no
-        # tick list, built because the screens read them.
-        for plc in declarations.plcs:
-            self.plcs[plc.prefix] = plcInfoRecord(plc.prefix)
-
-        for common in declarations.commons:
-            self.racks[common.dom] = COMMON_CLASSES[common.kind](common.dom)
+        # Every simple device the registry knows, built by the class its entry
+        # names.  The valves are vacuum devices and go on the layout; the RGA
+        # heads, the PLC link and the rack are not, and are built because the
+        # screens read them.
+        for declaration in declarations.devices:
+            template = DEVICE_BY_KIND[declaration.kind]
+            self.devices[declaration.kind][declaration.prefix] = template.cls(
+                declaration.prefix, **declaration.arguments)
 
         # declarations.groups is innermost first, which is what construction
         # needs - a group seeds its records from its members'.
@@ -112,7 +79,7 @@ class parsedIoc:
                    "valve": self.valves}
         for group in declarations.groups:
             own = members[group.kind]
-            self.groups[group.prefix] = GROUP_CLASSES[group.kind](
+            self.groups[group.prefix] = GROUP_BY_KIND[group.kind].cls(
                 group.prefix,
                 [own.get(name) or self.groups[name] for name in group.members],
                 delay=group.delay)
@@ -125,6 +92,15 @@ class parsedIoc:
 
     def __repr__(self):
         return repr(self.declarations).replace("xmlDeclarations", "parsedIoc")
+
+    def devicesOfKind(self, kind):
+        """The built devices of one registry kind, by prefix."""
+        return self.devices.get(kind, {})
+
+    @property
+    def valves(self):
+        """The valves, which are the only simple device on the vacuum layout."""
+        return self.devices["valve"]
 
     def report(self):
         return self.declarations.report()
@@ -168,46 +144,11 @@ class parsedIoc:
         non-interactive just serves - which is what a container wants, and
         what stops the process exiting the moment it has come up.
         """
-        devices = self.tickList()
-
-        # A generated instance settles its own ports in its header; this one
-        # has no header to put them in, so it says so here.  Without this,
-        # `dls-va-ioc-sim run` served a cell on whatever Channel Access
-        # configuration it inherited - which on a machine at Diamond is the
-        # real one.
-        setPortDefaults()
-
-        builder.LoadDatabase()
-        dispatcher = asyncio_dispatcher.AsyncioDispatcher()
-        # enable_pva=False - see epics_ports.  A PVXS server would otherwise
-        # serve these same PVs on the standard pvAccess port.
-        softioc.iocInit(dispatcher, enable_pva=False)
-
-        async def simulate():
-            # No arguments: the dispatcher hands extra ones to the coroutine
-            # differently depending on the pythonSoftIOC version, and passing
-            # none at all behaves the same on both.
-            reported = set()
-            while True:
-                await asyncio.sleep(period)
-                for device in devices:
-                    try:
-                        device.tick(period)
-                    except Exception:
-                        # A dispatched coroutine that raises is dropped
-                        # without a word, which leaves the IOC up but every
-                        # readback frozen.  Say so, once, and keep going.
-                        if device.prefix not in reported:
-                            reported.add(device.prefix)
-                            logging.exception("Simulation failed for %s",
-                                              device.prefix)
-
-        dispatcher(simulate)
-
-        if interactive:
-            softioc.interactive_ioc(namespace or {})
-        else:
-            softioc.non_interactive_ioc()
+        # The same loop a generated instance ends with - see simulation_loop.
+        # It was written out twice, here and inside generate_ioc's FOOTER as a
+        # string, and the two had to be kept in step by hand.
+        runSimulation(self.tickList(), period=period, interactive=interactive,
+                      namespace=namespace)
 
 
 def iocFromXml(path, cell=None, running=True):
