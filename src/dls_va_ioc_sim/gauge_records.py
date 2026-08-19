@@ -1058,6 +1058,15 @@ class imgGroupRecord(deviceGroup):
                                           DESC="Switching",
                                           initial_value=0)
 
+        # Which of the two on/off controls the screen shows - the :CCHV menu
+        # button, or a button that asks first.  A member has it and a group did
+        # not, so both widgets' visibility rules read a PV that was never
+        # there and the control came up blank on any group screen.
+        self.offWarningPV = builder.boolIn("OFFWARN", ZNAM="Warning off",
+                                           ONAM="Warning on",
+                                           DESC="Warning for OFF button",
+                                           initial_value=0)
+
         self.statusPV = builder.mbbIn("STA", *GAUGE_STATES,
                                       DESC="Status", UNSV="MAJOR",
                                       initial_value=highest(self.members,
