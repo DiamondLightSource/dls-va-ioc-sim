@@ -20,7 +20,7 @@ from time import sleep
 
 from softioc import builder
 
-from .device_groups import deviceGroup, highest, lowest, setDemand
+from .device_groups import acceptDemand, deviceGroup, highest, lowest
 
 
 class valveRecord:
@@ -76,10 +76,14 @@ class valveRecord:
 
         A method rather than a record write so that a valve group can fan a
         demand out through it, leaving :CON showing what was asked for as the
-        template's CA link does.  setDemand is what stops writing :CON here
-        from calling this back for ever - see device_groups.
+        template's CA link does.  acceptDemand is what stops writing :CON here
+        from calling this back - see device_groups.  It answers False for that
+        callback and only for it, and returning here is the whole of what an
+        echo does; True says a demand really was asked for, which is what a
+        subclass adding to this needs to know.
         """
-        setDemand(self.conPV, value)
+        if not acceptDemand(self.conPV, value):
+            return False
         if self.conVals[value] == "Open":
             self.open()
         if self.conVals[value] == "Close":
@@ -87,6 +91,7 @@ class valveRecord:
         if self.conVals[value] == "Reset":
             self.reset()
         self.lastConPV.set(value)
+        return True
 
 
     def isOpen(self):
@@ -202,9 +207,11 @@ class fvalveRecord(valveRecord):
 
 
     def setCon(self,value):
-        super().setCon(value)
+        if not super().setCon(value):
+            return False
         if self.conVals[value] == "Arm":
             self.arm()
+        return True
 
     def open(self):
         if (self.staVals[self.staPV.get()] != "Open"
@@ -289,9 +296,12 @@ class valveGroupRecord(deviceGroup):
         The template staggers these by :SEQOPEN's DLY fields; see device_groups
         for why the stagger is not slept through here.  Each valve's own open()
         does still sleep for its OPEN_DELAY, so a group of several valves takes
-        a moment to return.
+        a moment to return - which is why a demand arriving while one is
+        running is ordinary rather than exotic, and why the echo this write
+        makes must not be mistaken for one.
         """
-        setDemand(self.conPV, value)
+        if not acceptDemand(self.conPV, value):
+            return False
         self.openingPV.set(1 if self.CON_VALS[value] == "Open" else 0)
         try:
             for member in self.members:
@@ -299,6 +309,7 @@ class valveGroupRecord(deviceGroup):
         finally:
             self.openingPV.set(0)
         self.lastConPV.set(value)
+        return True
 
     # -- readbacks ------------------------------------------------------------
 

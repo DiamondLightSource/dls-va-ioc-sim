@@ -523,13 +523,36 @@ pumps flapping between Standby and Waiting.
 
 Groups have to write their members' demand records, because the real templates fan
 out with CA links and a pump started by its group does show Start on its own
-`:START`. Do it through **`device_groups.setDemand`**, which writes only on a
-change and so settles after one extra pass. Every setter reached that way must be
-safe to run twice — they are.
+`:START`. Do it through **`device_groups.acceptDemand`**, and return early when it
+answers `False`:
+
+```python
+def setCon(self, value):
+    if not acceptDemand(self.conPV, value):
+        return          # our own write coming back
+    ...
+```
+
+Writing only on a change is **not** enough on its own. It settles one demand: the
+echo finds its own value already there and stops. Two demands in flight never
+settle — each echo finds the *other* demand's value on the record, so each one
+writes, and each write makes another echo. That was a real bug, reported as a
+valve that opened and closed once a second for ever after a space was opened and
+a group closed underneath it. Two demands in flight is ordinary here: a fan-out
+sleeps through every valve's `OPEN_DELAY`, seconds for a cell, and whatever the
+operator does next lands inside it.
+
+So `acceptDemand` remembers each write and throws away the one callback it causes,
+matched **by value** and in order. Counting the echoes instead would drop the
+operator's second demand, which is the first callback to arrive when two are in
+flight. An echo is not a demand; anything else is one, whatever value it carries.
 
 The trap is invisible before `iocInit`: a script that builds the database and
 calls the setters directly sees no re-entry at all, which is why this was
-originally written down backwards.
+originally written down backwards. `acceptDemand` only expects an echo once
+softioc has a dispatcher, so a unit test and `dbdump` behave as they always did —
+and `tests/test_demands.py` is the one place a running IOC is started to check
+what only a running IOC does.
 
 ## Verifying a change
 

@@ -39,7 +39,7 @@ from typing import Any
 
 from softioc import builder
 
-from .device_groups import deviceGroup, highest, lowest, median, setDemand
+from .device_groups import acceptDemand, deviceGroup, highest, lowest, median
 from .vacuum_sim import PRESSURE_MAX, PRESSURE_MIN, clampPressure, droop, jitter
 
 # What a pump's readbacks are seeded with before the first tick.  A pump is
@@ -368,13 +368,14 @@ class ionPumpRecord:
     # -- commands ------------------------------------------------------------
     #
     # The setters below are what an ion pump group fans a demand out through,
-    # and what :START's own callback runs.  They go through setDemand rather
+    # and what :START's own callback runs.  They go through acceptDemand rather
     # than .set() so that writing the demand record does not call them again -
-    # see device_groups.
+    # see device_groups, and return early for the callback that write makes.
 
     def setStart(self, value):
         """:START - 1 starts the supply, 0 stops it."""
-        setDemand(self.startPV, 1 if value else 0)
+        if not acceptDemand(self.startPV, 1 if value else 0):
+            return
         if value:
             self.start()
         else:
@@ -382,12 +383,14 @@ class ionPumpRecord:
 
     def setSize(self, value):
         """:SETSIZE - tell the controller how big this pump is."""
-        setDemand(self.setSizePV, value)
+        if not acceptDemand(self.setSizePV, value):
+            return
         self.sizePV.set(int(value))
 
     def setCal(self, value):
         """:SETCAL - the calibration factor the current is scaled by."""
-        setDemand(self.setCalPV, value)
+        if not acceptDemand(self.setCalPV, value):
+            return
         self.calPV.set(value)
 
     def start(self):
@@ -532,12 +535,14 @@ class setpointRecords:
 
     def setOn(self, value):
         """:SETSP<n>ON - the level the relay comes on below."""
-        setDemand(self.setOnPV, value)
+        if not acceptDemand(self.setOnPV, value):
+            return
         self.onPV.set(value)
 
     def setOff(self, value):
         """:SETSP<n>OFF - the level it drops out again above."""
-        setDemand(self.setOffPV, value)
+        if not acceptDemand(self.setOffPV, value):
+            return
         self.offPV.set(value)
 
     def update(self, pressure, pumping):
@@ -601,12 +606,14 @@ class groupSetpointRecords:
                 for member in self.members]
 
     def setOn(self, value):
-        setDemand(self.setOnPV, value)
+        if not acceptDemand(self.setOnPV, value):
+            return
         for setpoint in self.setpoints():
             setpoint.setOn(value)
 
     def setOff(self, value):
-        setDemand(self.setOffPV, value)
+        if not acceptDemand(self.setOffPV, value):
+            return
         for setpoint in self.setpoints():
             setpoint.setOff(value)
 
@@ -717,7 +724,8 @@ class ionPumpGroupRecord(deviceGroup):
         inrush; see device_groups for why the stagger is not slept through here.
         A member that is itself a group passes the demand on down.
         """
-        setDemand(self.startPV, 1 if value else 0)
+        if not acceptDemand(self.startPV, 1 if value else 0):
+            return
         self.startingPV.set(1)
         try:
             for member in self.members:
@@ -726,7 +734,8 @@ class ionPumpGroupRecord(deviceGroup):
             self.startingPV.set(0)
 
     def setCal(self, value):
-        setDemand(self.setCalPV, value)
+        if not acceptDemand(self.setCalPV, value):
+            return
         for member in self.members:
             member.setCal(value)
         self.calPV.set(value)
