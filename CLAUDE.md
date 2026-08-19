@@ -47,7 +47,8 @@ The framework, in `src/dls_va_ioc_sim/`:
 | `ion_pump_records.py` | Digitel MPC controllers, the ion pumps on them, and groups |
 | `gauge_records.py` | MKS 937B controllers, IMG/Pirani gauges, relays, and groups |
 | `fe_seq_records.py` | Valves, absorbers, shutters, their interlock chain, and groups |
-| `rga_records.py` | `rgamv2.template` - `:STA` only, nothing else of an RGA |
+| `rga_records.py` | `rgamv2.template` - `:STA` only, and the `:PWRC` power cycle line |
+| `rack_records.py` | The rack and the PLC: fans, 24 V supplies, PLC health. **No vacuum** |
 | `vacuum_sim.py` | Shared helpers: pressure range, log-space slide, noise |
 | `builder_xml.py` | Reads a real IOC's builder XML. Plain data, **no records** |
 | `generate_ioc.py` | Writes an instance out as Python, from that. The way in |
@@ -598,6 +599,15 @@ sets its own port, so it needs only the two `EPICS_CAS_*` lines above.
   `spaceRecord.statusSeverity()`; the `alarmLimit` objects beside it hold each
   limit once and hand it to both the record's fields and the Python that has to
   agree with them.
+- **Not everything served has to be simulated.** `rack_records.py` is a whole
+  module of records that hold one value for the life of the IOC — the rack
+  fans, the 24 V supplies, the PLC's own health, the RGA power cycle lines.
+  They are here because the screens read them and an unserved PV is a white box
+  on a screen, which reads as broken rather than as unsimulated. That is a
+  different bargain from the vacuum devices, so it is kept in a module of its
+  own: nothing there ticks, nothing there is on the vacuum layout, and none of
+  it may grow a dependency on a volume. If one ever has to move, give the class
+  a `tick()` and put it on the instance's tick list.
 - **Slide pressures in log space** (`vacuumSim.slideLog`). Vacuum covers decades and
   a linear approach spends all its time in the top decade, then appears to stop.
 - **Keep deliberate template infidelities, with a comment saying so.** An ion pump's

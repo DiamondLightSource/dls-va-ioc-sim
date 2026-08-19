@@ -50,6 +50,24 @@ def test_the_instance_builds_its_records(generated, tmp_path):
     assert "SR99C-VA-SPACE-01" in text
 
 
+def test_the_rack_and_the_plc_reach_the_database(generated, tmp_path):
+    """None of these is a vacuum device and none of them ticks, so the only
+    thing that can go wrong is that they are not built at all - which is
+    exactly what a screen full of white boxes is."""
+    database = tmp_path / "rack.db"
+    cli("dbdump", generated.name, str(database), cwd=tmp_path)
+    text = database.read_text()
+
+    for name in (
+        'record(bi, "SR99C-VA-VLVCC-01:PLCHEALTHY")',
+        'record(bi, "SR99C-VA-FANC-03:STA")',
+        'record(bi, "SR99C-VA-PSU-02:STA")',
+        'record(ai, "SR99C-VA-PSU-01:2:VOLTAGE")',
+        'record(ao, "SR99A-VA-RGA-02:PWRC")',
+    ):
+        assert name in text
+
+
 def test_the_database_is_the_same_every_time(generated, tmp_path):
     """The check the framework is verified with: assembly must be
     deterministic, byte for byte, or a before/after diff means nothing."""

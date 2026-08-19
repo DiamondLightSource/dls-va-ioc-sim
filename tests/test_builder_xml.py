@@ -73,6 +73,16 @@ def test_a_space_names_five_groups_that_exist(cellXml):
             assert prefix in groups
 
 
+def test_the_plc_and_the_cell_rack_are_read_off_the_xml(cellXml):
+    """Two single lines of XML that a screen needs the PVs of: the EtherIP
+    link, which publishes its own health, and SR-VA.common, which is a whole
+    rack of fans and 24 V supplies named after the cell."""
+    declarations = parseXml(cellXml, cell="99")
+
+    assert [plc.prefix for plc in declarations.plcs] == ["SR99C-VA-VLVCC-01"]
+    assert [common.dom for common in declarations.commons] == ["SR99C"]
+
+
 def test_every_pump_belongs_to_a_controller_that_was_declared(cellXml):
     declarations = parseXml(cellXml, cell="99")
     controllers = {controller.prefix for controller in declarations.controllers}

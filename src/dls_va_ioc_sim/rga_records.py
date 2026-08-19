@@ -1,8 +1,9 @@
 """A minimal stand-in for one MicroVision Plus RGA head - rgamv2.template.
 
-Only one record is built:
+One record each of two templates:
 
-    rgamv2.template -> rgaRecord  -- :STA, and nothing else
+    rgamv2.template        -> rgaRecord            -- :STA, and nothing else
+    rgaPowerCycle.template -> rgaPowerCycleRecord  -- :PWRC
 
 An RGA takes no gas load and pumps nothing, so it holds no `volume` and is
 never on the vacuum layout or the tick list - see vacuum_model.  There is
@@ -42,4 +43,27 @@ class rgaRecord:
 
         self.statusPV = builder.longIn(
             "STA", DESC="Overall status", initial_value=STATUS_FILAMENT_ON_BARCHART_1_50
+        )
+
+
+class rgaPowerCycleRecord:
+    """The line that power cycles a head - SR-VA's rgaPowerCycle.template.
+
+    One record, and on the real IOC it is an ao straight onto an EtherIP tag:
+    writing to it drops the head's supply and brings it back.  The head is
+    wired to the cell's PLC rather than to the RGA controller, which is why
+    SR-VA declares this in `common.xml` with the rest of the rack and not
+    beside the head itself.
+
+    There is nothing here to cycle - rgaRecord's :STA is a constant - so the
+    write is accepted and the demand is what the button on the screen reads
+    back.  It is built with the template's own VAL of 1.
+    """
+
+    def __init__(self, prefix):
+        builder.SetDeviceName(prefix)
+        self.prefix = prefix
+
+        self.powerCyclePV = builder.aOut(
+            "PWRC", DESC="Control", always_update=True, initial_value=1
         )

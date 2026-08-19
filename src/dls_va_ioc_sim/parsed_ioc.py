@@ -22,6 +22,7 @@ from .gauge_records import (
     pirgGroupRecord,
 )
 from .ion_pump_records import ionPumpGroupRecord, ionPumpRecord, mpcRecord
+from .rack_records import commonRecord, plcInfoRecord
 from .rga_records import rgaRecord
 from .vacuum_space_records import spaceRecord
 
@@ -60,6 +61,8 @@ class parsedIoc:
         self.pirgs = {}
         self.valves = {}
         self.rgas = {}
+        self.plcs = {}
+        self.racks = {}
         self.groups = {}
         self.spaces = []
 
@@ -88,6 +91,14 @@ class parsedIoc:
 
         for rga in declarations.rgas:
             self.rgas[rga.prefix] = rgaRecord(rga.prefix)
+
+        # The rack and the PLC: not vacuum devices, on no volume and on no
+        # tick list, built because the screens read them.
+        for plc in declarations.plcs:
+            self.plcs[plc.prefix] = plcInfoRecord(plc.prefix)
+
+        for common in declarations.commons:
+            self.racks[common.dom] = commonRecord(common.dom)
 
         # declarations.groups is innermost first, which is what construction
         # needs - a group seeds its records from its members'.

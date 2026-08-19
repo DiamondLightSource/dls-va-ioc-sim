@@ -59,7 +59,7 @@ FAMILY_NAMES = {
     "MPC": "mpc", "IONP": "ionp", "VALVE": "valve", "FVALV": "fvalve",
     "GCTLR": "gaugeSet", "GAUGE": "gauge", "IMG": "img", "PIRG": "pirg",
     "GIONP": "gionp", "GGAUG": "ggaug", "GIMG": "gimg", "GPIRG": "gpirg",
-    "GVALV": "gvalv", "SPACE": "space", "RGA": "rga",
+    "GVALV": "gvalv", "SPACE": "space", "RGA": "rga", "VLVCC": "plc",
 }
 
 # Group kind -> the class the generated file calls, and what it takes its
@@ -144,6 +144,7 @@ from dls_va_ioc_sim.gauge_records import (gaugeGroupRecord, gaugeSetRecord,
                                          imgGroupRecord, pirgGroupRecord)
 from dls_va_ioc_sim.ion_pump_records import (ionPumpGroupRecord, ionPumpRecord,
                                            mpcRecord)
+from dls_va_ioc_sim.rack_records import commonRecord, plcInfoRecord
 from dls_va_ioc_sim.rga_records import rgaRecord
 from dls_va_ioc_sim.vacuum_model import gate, vacuumLayout, vacuumVolume
 from dls_va_ioc_sim.vacuum_space_records import spaceRecord
@@ -517,6 +518,25 @@ def generate(declarations, iocName=None, instance=None):
     out.extend(_wrapped("rgas = [",
                         [naming.of(rga.prefix) for rga in declarations.rgas],
                         "]"))
+
+    # --- the rack and the PLC ------------------------------------------------
+    out.append("""
+# ---------------------------------------------------------------------------
+# The rack and the PLC
+#
+# Not vacuum devices and not on the layout below: the fans, the 24 V supplies
+# and the PLC's own health are what a cell overview shows beside the vacuum,
+# and they are here so that a screen has something to read.  Every value is
+# set once and stays there - see rack_records.
+# ---------------------------------------------------------------------------
+""")
+    for plc in declarations.plcs:
+        out.append(f'{naming.of(plc.prefix)} = plcInfoRecord("{plc.prefix}")')
+    for index, common in enumerate(declarations.commons):
+        # One line of XML per cell, and one here: commonRecord builds the
+        # whole of SR-VA's common.xml for the domain it is given.
+        variable = "common" if not index else f"common{index + 1}"
+        out.append(f'{variable} = commonRecord("{common.dom}")')
 
     # --- the layout ----------------------------------------------------------
     layout, volumes = layoutSource(declarations, naming)

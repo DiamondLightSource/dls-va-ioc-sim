@@ -97,6 +97,16 @@ def test_every_valve_is_built_even_though_none_is_a_gate(declarations):
         assert f'valveRecord("{prefix}")' in source
 
 
+def test_the_rack_and_the_plc_are_written_into_the_instance(declarations):
+    """A cell overview shows the rack beside the vacuum, so the fans, the 24 V
+    supplies and the PLC's own health are built even though none of them is a
+    vacuum device and none of them ticks."""
+    source = generate(declarations)
+
+    assert 'plcInfoRecord("SR99C-VA-VLVCC-01")' in source
+    assert 'commonRecord("SR99C")' in source
+
+
 def test_the_instance_keeps_the_non_standard_ports(declarations):
     """The ports are in the instance, not in a wrapper around it: there is
     then no way to start one on the real machine's port by forgetting a

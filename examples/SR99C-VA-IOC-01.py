@@ -54,6 +54,7 @@ from dls_va_ioc_sim.gauge_records import (
     pirgGroupRecord,
 )
 from dls_va_ioc_sim.ion_pump_records import ionPumpGroupRecord, ionPumpRecord, mpcRecord
+from dls_va_ioc_sim.rack_records import commonRecord, plcInfoRecord
 from dls_va_ioc_sim.vacuum_model import gate, vacuumLayout, vacuumVolume
 from dls_va_ioc_sim.vacuum_space_records import spaceRecord
 
@@ -346,6 +347,18 @@ valveA01 = valveRecord("SR99A-VA-VALVE-01")
 valveA02 = valveRecord("SR99A-VA-VALVE-02")
 valveA03 = valveRecord("SR99A-VA-VALVE-03")
 valveA04 = valveRecord("SR99A-VA-VALVE-04")
+
+# ---------------------------------------------------------------------------
+# The rack and the PLC
+#
+# Not vacuum devices and not on the layout below: the fans, the 24 V supplies
+# and the PLC's own health are what a cell overview shows beside the vacuum,
+# and they are here so that a screen has something to read.  Every value is
+# set once and stays there - see rack_records.
+# ---------------------------------------------------------------------------
+
+plcC01 = plcInfoRecord("SR99C-VA-VLVCC-01")
+common = commonRecord("SR99C")
 
 # ---------------------------------------------------------------------------
 # The vacuum layout                                            *** EDIT ME ***

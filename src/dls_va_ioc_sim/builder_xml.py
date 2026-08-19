@@ -24,6 +24,8 @@
 #   dlsPLC.NX102_vacValveDebounce            valveRecord
 #   dlsPLC.vacValveDebounce                  valveRecord
 #   rgamv2.rgamv2                            rgaRecord, :STA only
+#   ether_ip.EtherIPInit                     plcInfoRecord, the PLC's own health
+#   SR-VA.common                             commonRecord, the cell's rack
 #   digitelMpc.digitelMpcIonpGroup           ionPumpGroupRecord
 #   mks937{a,b}.mks937{a,b}GaugeGroup        gaugeGroupRecord
 #   mks937{a,b}.mks937{a,b}ImgGroup          imgGroupRecord
@@ -116,14 +118,12 @@ IGNORED_TAGS = {
     "dlsPLC.NX102_IRVacuum": "PLC glue, no PLC here",
     "dlsPLC.read100": "PLC glue, no PLC here",
     "dlsPLC.auto_dlsPLC_CommsStatus": "PLC glue, no PLC here",
-    "ether_ip.EtherIPInit": "a link to hardware that is not here",
     "FINS.FINSUDPInit": "a link to hardware that is not here",
     "FINS.FINSHostlink": "a link to hardware that is not here",
     "FINS.FINSTemplate": "a link to hardware that is not here",
     "asyn.AsynIP": "a link to hardware that is not here",
     "asyn.AsynSerial": "a link to hardware that is not here",
     "terminalServer.Moxa": "a link to hardware that is not here",
-    "SR-VA.common": "IOC and rack housekeeping",
     "SR-VA.auto_psu24vStatus": "IOC and rack housekeeping",
     "SR-VA.auto_ecatDuplexPSUStatus": "IOC and rack housekeeping",
     "rackFan.rackFan": "IOC and rack housekeeping",
@@ -224,6 +224,29 @@ class rgaDeclaration:
         self.prefix = prefix
 
 
+class plcDeclaration:
+    """The PLC behind an EtherIP port - ether_ip.EtherIPInit.
+
+    The port and the IP address it names are a link to hardware that is not
+    here and are not kept; the device name is, because the driver publishes
+    the link's own health on it and the screens read that.
+    """
+
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+
+class commonDeclaration:
+    """A cell's rack and PLC housekeeping - SR-VA.common.
+
+    One line of XML that expands to the whole of SR-VA's common.xml, so the
+    domain is all it carries: every device in it is named after the cell.
+    """
+
+    def __init__(self, dom):
+        self.dom = dom
+
+
 class groupDeclaration:
     """One group: what kind, what is in it, and how long it staggers them."""
 
@@ -260,6 +283,8 @@ class xmlDeclarations:
         self.gaugeSets = []             # gaugeSetDeclaration
         self.valves = []                # prefixes
         self.rgas = []                  # rgaDeclaration
+        self.plcs = []                  # plcDeclaration
+        self.commons = []               # commonDeclaration
         self.groups = []                # groupDeclaration, innermost first
         self.spaces = []                # spaceDeclaration
 
@@ -328,7 +353,9 @@ class xmlDeclarations:
                  f"{len(self.gaugeSets)} controllers",
                  f"           {len(self.valves)} valves, "
                  f"{len(self.rgas)} RGAs, "
-                 f"{len(self.groups)} groups, {len(self.spaces)} spaces"]
+                 f"{len(self.groups)} groups, {len(self.spaces)} spaces",
+                 f"           {len(self.plcs)} PLCs, "
+                 f"{len(self.commons)} racks"]
         if self.dropped:
             lines.append("  dropped")
             for what, why in self.dropped:
@@ -398,6 +425,11 @@ def parseXml(path, cell=None):
             declarations.valves.append(device(element))
         elif element.tag == "rgamv2.rgamv2":
             declarations.rgas.append(rgaDeclaration(device(element)))
+        elif element.tag == "ether_ip.EtherIPInit":
+            declarations.plcs.append(plcDeclaration(device(element)))
+        elif element.tag == "SR-VA.common":
+            declarations.commons.append(
+                commonDeclaration(device(element, "dom")))
 
     _parseGroups(declarations, root, cell)
     _parseSpaces(declarations, root, cell, device)
@@ -406,7 +438,8 @@ def parseXml(path, cell=None):
                   | set(PIRG_TAGS) | set(VALVE_TAGS) | set(GROUP_TAGS)
                   | {"digitelMpc.digitelMpc", "digitelMpc.digitelMpcIonp",
                      "QPC.digitelQpc", "QPC.digitelQpcIonp",
-                     "vacuumSpace.spaceTemplate", "rgamv2.rgamv2"})
+                     "vacuumSpace.spaceTemplate", "rgamv2.rgamv2",
+                     "ether_ip.EtherIPInit", "SR-VA.common"})
     for element in root:
         if element.tag in translated:
             continue
