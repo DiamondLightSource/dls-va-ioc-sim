@@ -64,6 +64,12 @@ FAMILY_NAMES = {
 
 # Group kind -> the class the generated file calls, and what it takes its
 # members from.  A gauge group takes the gauge, an IMG group the gauge's img.
+# Which of SR-VA's two rack files a cell was built from -> the class for it.
+COMMON_CALLS = {
+    "common": "commonRecord",
+    "commonD2": "commonD2Record",
+}
+
 GROUP_CALLS = {
     "ionp": ("ionPumpGroupRecord", None),
     "gauge": ("gaugeGroupRecord", None),
@@ -144,7 +150,8 @@ from dls_va_ioc_sim.gauge_records import (gaugeGroupRecord, gaugeSetRecord,
                                          imgGroupRecord, pirgGroupRecord)
 from dls_va_ioc_sim.ion_pump_records import (ionPumpGroupRecord, ionPumpRecord,
                                            mpcRecord)
-from dls_va_ioc_sim.rack_records import commonRecord, plcInfoRecord
+from dls_va_ioc_sim.rack_records import (commonD2Record, commonRecord,
+                                        plcInfoRecord)
 from dls_va_ioc_sim.rga_records import rgaRecord
 from dls_va_ioc_sim.vacuum_model import gate, vacuumLayout, vacuumVolume
 from dls_va_ioc_sim.vacuum_space_records import spaceRecord
@@ -533,10 +540,12 @@ def generate(declarations, iocName=None, instance=None):
     for plc in declarations.plcs:
         out.append(f'{naming.of(plc.prefix)} = plcInfoRecord("{plc.prefix}")')
     for index, common in enumerate(declarations.commons):
-        # One line of XML per cell, and one here: commonRecord builds the
-        # whole of SR-VA's common.xml for the domain it is given.
+        # One line of XML per cell, and one here: the class builds the whole
+        # of SR-VA's rack file for the domain it is given, and which class it
+        # is says which of the two files the cell was built from.
         variable = "common" if not index else f"common{index + 1}"
-        out.append(f'{variable} = commonRecord("{common.dom}")')
+        call = COMMON_CALLS[common.kind]
+        out.append(f'{variable} = {call}("{common.dom}")')
 
     # --- the layout ----------------------------------------------------------
     layout, volumes = layoutSource(declarations, naming)

@@ -607,7 +607,11 @@ sets its own port, so it needs only the two `EPICS_CAS_*` lines above.
   different bargain from the vacuum devices, so it is kept in a module of its
   own: nothing there ticks, nothing there is on the vacuum layout, and none of
   it may grow a dependency on a volume. If one ever has to move, give the class
-  a `tick()` and put it on the instance's tick list.
+  a `tick()` and put it on the instance's tick list. **Both of SR-VA's rack
+  files are read** — `common.xml` and the Diamond-II `commonD2.xml` that is
+  replacing it — because cells are moving over one at a time. They differ only
+  in which RGA heads the PLC power cycles, which is the one thing
+  `commonD2Record` overrides.
 - **Slide pressures in log space** (`vacuumSim.slideLog`). Vacuum covers decades and
   a linear approach spends all its time in the top decade, then appears to stop.
 - **Keep deliberate template infidelities, with a comment saying so.** An ion pump's

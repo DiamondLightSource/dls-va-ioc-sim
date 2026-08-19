@@ -6,6 +6,8 @@
     SR-VA.common (etc/makeIocs/common.xml)
                                        -> commonRecord, all of the above for
                                           one cell, in the same devices
+    SR-VA.commonD2 (etc/makeIocs/commonD2.xml)
+                                       -> commonD2Record, the Diamond-II rack
 
 None of it is a vacuum device.  A fan, a 24 V supply and the PLC's own health
 neither hold gas nor pump it, so nothing here goes on the vacuum layout or the
@@ -58,6 +60,14 @@ DUPLEX_SUPPLIES = (
     ("PSU-02", "Rack 02 Duplex PSU Status"),
 )
 POWER_CYCLED_RGAS = ("S-VA-RGA-01", "A-VA-RGA-01", "A-VA-RGA-02")
+
+# Diamond-II moves the heads: commonD2.xml asks for RGA-01 in a straight and
+# two girder domains rather than one in S and two in A, and names them through
+# $(straight1), $(girder1) and $(girder2).  These are the values those macros
+# take in the D2 cells written so far - SR03C declares exactly these three as
+# its rgamv2 heads - and they are the one thing that differs between the two
+# files, which are otherwise identical line for line.
+D2_POWER_CYCLED_RGAS = ("S-VA-RGA-01", "SM-VA-RGA-01", "MS-VA-RGA-01")
 
 
 class plcInfoRecord:
@@ -240,7 +250,12 @@ class commonRecord:
     either a link to hardware that is not here or glue between records that
     are.  What a screen shows is above; what makes it work on the real machine
     is not simulated.
+
+    commonD2Record below is the Diamond-II file, and differs only in which
+    heads the power cycle lines go to.
     """
+
+    RGAS = POWER_CYCLED_RGAS
 
     def __init__(self, dom):
         self.prefix = dom
@@ -267,6 +282,18 @@ class commonRecord:
         ]
 
         self.rgaPowerCycles = [
-            rgaPowerCycleRecord(f"SR{self.cell}{suffix}")
-            for suffix in POWER_CYCLED_RGAS
+            rgaPowerCycleRecord(f"SR{self.cell}{suffix}") for suffix in self.RGAS
         ]
+
+
+class commonD2Record(commonRecord):
+    """The Diamond-II rack - SR-VA.commonD2, etc/makeIocs/commonD2.xml.
+
+    The same rack, and the same class: the two files differ in three lines out
+    of thirty, which are the RGA power cycle devices.  Subclassing rather than
+    passing the names in keeps the generated instance saying which of the two
+    files a cell was built from, the way the XML does - SR-VA models this as
+    two templates and one builder object apiece, and so does this.
+    """
+
+    RGAS = D2_POWER_CYCLED_RGAS

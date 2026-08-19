@@ -26,6 +26,7 @@
 #   rgamv2.rgamv2                            rgaRecord, :STA only
 #   ether_ip.EtherIPInit                     plcInfoRecord, the PLC's own health
 #   SR-VA.common                             commonRecord, the cell's rack
+#   SR-VA.commonD2                           commonD2Record, the same in D2
 #   digitelMpc.digitelMpcIonpGroup           ionPumpGroupRecord
 #   mks937{a,b}.mks937{a,b}GaugeGroup        gaugeGroupRecord
 #   mks937{a,b}.mks937{a,b}ImgGroup          imgGroupRecord
@@ -71,6 +72,14 @@ CONTROLLER_TAGS = ("mks937a.mks937a", "mks937b.mks937b")
 IMG_TAGS = ("mks937a.mks937aImg", "mks937b.mks937bImg")
 PIRG_TAGS = ("mks937a.mks937aPirg", "mks937b.mks937bPirg")
 VALVE_TAGS = ("dlsPLC.NX102_vacValveDebounce", "dlsPLC.vacValveDebounce")
+
+# A cell's rack, and which of SR-VA's two files declares it.  commonD2.xml is
+# replacing common.xml cell by cell, so both have to be read for as long as
+# both are in use; the kind is what the generator picks a class by.
+COMMON_TAGS = {
+    "SR-VA.common": "common",
+    "SR-VA.commonD2": "commonD2",
+}
 
 # Group tag -> (kind, the prefix its member attributes use).  The kind is what
 # the rest of this module and the generator index everything by.
@@ -237,14 +246,17 @@ class plcDeclaration:
 
 
 class commonDeclaration:
-    """A cell's rack and PLC housekeeping - SR-VA.common.
+    """A cell's rack and PLC housekeeping - SR-VA.common or SR-VA.commonD2.
 
     One line of XML that expands to the whole of SR-VA's common.xml, so the
-    domain is all it carries: every device in it is named after the cell.
+    domain is all it carries: every device in it is named after the cell.  The
+    kind says which of the two files it was - they differ only in which RGA
+    heads the PLC has a power cycle line to.
     """
 
-    def __init__(self, dom):
+    def __init__(self, dom, kind="common"):
         self.dom = dom
+        self.kind = kind
 
 
 class groupDeclaration:
@@ -427,9 +439,10 @@ def parseXml(path, cell=None):
             declarations.rgas.append(rgaDeclaration(device(element)))
         elif element.tag == "ether_ip.EtherIPInit":
             declarations.plcs.append(plcDeclaration(device(element)))
-        elif element.tag == "SR-VA.common":
+        elif element.tag in COMMON_TAGS:
             declarations.commons.append(
-                commonDeclaration(device(element, "dom")))
+                commonDeclaration(device(element, "dom"),
+                                  kind=COMMON_TAGS[element.tag]))
 
     _parseGroups(declarations, root, cell)
     _parseSpaces(declarations, root, cell, device)
@@ -439,7 +452,8 @@ def parseXml(path, cell=None):
                   | {"digitelMpc.digitelMpc", "digitelMpc.digitelMpcIonp",
                      "QPC.digitelQpc", "QPC.digitelQpcIonp",
                      "vacuumSpace.spaceTemplate", "rgamv2.rgamv2",
-                     "ether_ip.EtherIPInit", "SR-VA.common"})
+                     "ether_ip.EtherIPInit"}
+                  | set(COMMON_TAGS))
     for element in root:
         if element.tag in translated:
             continue

@@ -107,6 +107,14 @@ def test_the_rack_and_the_plc_are_written_into_the_instance(declarations):
     assert 'commonRecord("SR99C")' in source
 
 
+def test_a_diamond_two_cell_gets_the_diamond_two_rack(d2CellXml):
+    """The instance says which of SR-VA's two rack files the cell was built
+    from, because the class it calls is the one that names the right heads."""
+    source = generate(parseXml(d2CellXml, cell="99"))
+
+    assert 'commonD2Record("SR99C")' in source
+
+
 def test_the_instance_keeps_the_non_standard_ports(declarations):
     """The ports are in the instance, not in a wrapper around it: there is
     then no way to start one on the real machine's port by forgetting a

@@ -22,13 +22,18 @@ from .gauge_records import (
     pirgGroupRecord,
 )
 from .ion_pump_records import ionPumpGroupRecord, ionPumpRecord, mpcRecord
-from .rack_records import commonRecord, plcInfoRecord
+from .rack_records import commonD2Record, commonRecord, plcInfoRecord
 from .rga_records import rgaRecord
 from .vacuum_space_records import spaceRecord
 
 # How often the simulated devices recalculate their readbacks.  One second
 # matches the SCAN rate the real templates poll their hardware at.
 SIMULATION_PERIOD = 1.0
+
+COMMON_CLASSES = {
+    "common": commonRecord,
+    "commonD2": commonD2Record,
+}
 
 GROUP_CLASSES = {
     "ionp": ionPumpGroupRecord,
@@ -98,7 +103,7 @@ class parsedIoc:
             self.plcs[plc.prefix] = plcInfoRecord(plc.prefix)
 
         for common in declarations.commons:
-            self.racks[common.dom] = commonRecord(common.dom)
+            self.racks[common.dom] = COMMON_CLASSES[common.kind](common.dom)
 
         # declarations.groups is innermost first, which is what construction
         # needs - a group seeds its records from its members'.

@@ -68,6 +68,30 @@ def test_the_rack_and_the_plc_reach_the_database(generated, tmp_path):
         assert name in text
 
 
+def test_a_diamond_two_cell_builds_its_own_rack_and_its_rga_heads(d2CellXml, tmp_path):
+    """The other rack file, end to end.  D2 moves the power cycle lines onto
+    RGA-01 in a straight and two girder domains, and declares its heads as
+    rgamv2 rather than rga - which is the only fixture that builds an
+    rgaRecord at all."""
+    cli("generate", str(d2CellXml), "99", cwd=tmp_path)
+    database = tmp_path / "d2.db"
+    cli("dbdump", "sr99c-va-ioc-01-d2.py", str(database), cwd=tmp_path)
+    text = database.read_text()
+
+    for name in (
+        'record(ao, "SR99S-VA-RGA-01:PWRC")',
+        'record(ao, "SR99SM-VA-RGA-01:PWRC")',
+        'record(ao, "SR99MS-VA-RGA-01:PWRC")',
+        'record(longin, "SR99MS-VA-RGA-01:STA")',
+        'record(bi, "SR99C-VA-FANC-01:STA")',
+        'record(ai, "SR99C-VA-PSU-02:2:VOLTAGE")',
+    ):
+        assert name in text
+
+    # The pre-D2 heads are not built for a D2 cell.
+    assert "SR99A-VA-RGA-02:PWRC" not in text
+
+
 def test_the_database_is_the_same_every_time(generated, tmp_path):
     """The check the framework is verified with: assembly must be
     deterministic, byte for byte, or a before/after diff means nothing."""

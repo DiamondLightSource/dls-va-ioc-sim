@@ -81,6 +81,23 @@ def test_the_plc_and_the_cell_rack_are_read_off_the_xml(cellXml):
 
     assert [plc.prefix for plc in declarations.plcs] == ["SR99C-VA-VLVCC-01"]
     assert [common.dom for common in declarations.commons] == ["SR99C"]
+    assert [common.kind for common in declarations.commons] == ["common"]
+
+
+def test_the_diamond_two_rack_is_read_as_its_own_kind(d2CellXml):
+    """commonD2.xml is replacing common.xml cell by cell, so both are read for
+    as long as both are in use, and which one a cell had has to survive the
+    parse - the two files put the RGA power cycle lines on different heads."""
+    declarations = parseXml(d2CellXml, cell="99")
+
+    assert [common.kind for common in declarations.commons] == ["commonD2"]
+    assert [common.dom for common in declarations.commons] == ["SR99C"]
+
+
+def test_a_diamond_two_cell_has_nothing_unrecognised_in_it_either(d2CellXml):
+    declarations = parseXml(d2CellXml, cell="99")
+
+    assert declarations.unrecognised() == []
 
 
 def test_every_pump_belongs_to_a_controller_that_was_declared(cellXml):
