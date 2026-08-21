@@ -50,8 +50,10 @@ The framework, in `src/dls_va_ioc_sim/`:
 | `rga_records.py` | `rgamv2.template` - `:STA` only, and the `:PWRC` power cycle line |
 | `rack_records.py` | The rack and the PLC: fans, 24 V supplies, PLC health. **No vacuum** |
 | `vacuum_sim.py` | Shared helpers: pressure range, log-space slide, noise |
+| `device_registry.py` | **Every builder template, in one table.** What a tag means |
 | `builder_xml.py` | Reads a real IOC's builder XML. Plain data, **no records** |
 | `generate_ioc.py` | Writes an instance out as Python, from that. The way in |
+| `simulation_loop.py` | Starts the IOC and steps the devices. Every simulation ends here |
 | `start_ioc.py` | Serves written instances, one or many, as a single IOC |
 | `parsed_ioc.py` | Builds the records instead, for an instance that parses at start up |
 | `dbdump.py` | Builds an instance's records without starting it |
@@ -84,6 +86,61 @@ are named after the DLS template each mirrors (`ionPumpRecord` for
 switched off in `pyproject.toml` with the reason written next to them. That
 mapping is the specification when a device is edited; it is worth more than the
 naming convention.
+
+## Adding a template
+
+Almost every template a real cell declares is one element of XML with one device
+name in it. For those, the whole change is **one entry in
+`device_registry.DEVICES` and the record class it names**:
+
+```python
+deviceTemplate(
+    tags=("SR-VA.commonD3",),      # what the builder XML declares it as
+    kind="commonD3",               # what everything else indexes it by
+    module="rack_records",         # where the class lives...
+    className="commonD3Record",    # ...and what it is called
+    attribute="dom",               # which XML attribute carries the name
+    section="rack",                # which banner it is generated under
+    variableStem="common",         # optional: for a name with no family in it
+    label="racks",                 # what the parse report calls these
+    macros=("straight1",),         # optional: attributes passed on as kwargs
+),
+```
+
+`macros` is for a template that writes its device names through `$(macro)`
+rather than in full — only `SR-VA.commonD2` does so far. Each one a cell quotes
+is passed to the class as a keyword argument; each one it does not is left to
+the class's own default, which is what a `$(name=default)` in a template means.
+
+That one entry is enough for the parse to read it, the report to count it, the
+generated instance to import and call it, and `dls-va-ioc-sim run` to build it.
+There is nothing else to edit — no `translated` set, no import line, no
+class-name lookup in the generator and no class lookup in `parsed_ioc`. It was
+six edits across four files before the registry existed, and every one of them
+could be forgotten separately; `SR-VA.commonD2` cost 52 lines of that plumbing
+to deliver 31 lines of device.
+
+**The class must take the device name and nothing else without a default** —
+that is what makes the entry sufficient, and `test_every_device_class_takes_just_a_name`
+enforces it. A template that needs more than a name is not a `deviceTemplate`:
+it needs a declaration and a parser of its own, the way an ion pump supply does
+(matched to its controller by *builder* name) or a gauge pair does (an IMG-31
+and a PIRG-31 put back together into GAUGE-31). Those are `bespokeTemplate`
+entries — listed for their tags and their class, parsed by hand in
+`builder_xml.py` and emitted by hand in `generate_ioc.py`.
+
+**A class is named by strings, not imported.** That is what lets `builder_xml`
+hold the parse without importing a record, and lets `generate` run on a machine
+with no EPICS on it — `test_generating_an_instance_imports_no_epics` is the
+check. The price is that a typo in `className` is not a syntax error, so
+`test_every_template_names_a_class_that_exists` resolves every entry in the
+table.
+
+What is **not** simulated goes in the same file: `IGNORED_TAGS` for a tag known
+about and deliberately skipped, with the reason `report()` prints for it, and
+`IGNORED_MODULES` for a whole support module that is nothing to do with vacuum.
+Anything in neither is reported `NOT RECOGNISED`, which is the thing worth
+looking at when a new cell is simulated for the first time.
 
 ## The three layers
 
@@ -294,7 +351,10 @@ is what `dls-va-ioc-sim run` is. It goes through the same
 `builder_xml.parseXml`, so the two cannot drift — **keep it that way:
 `builder_xml` holds no EPICS records and must not import softioc.** The CLI
 relies on it: `generate` never imports softioc, so it works on a machine with no
-EPICS on it.
+EPICS on it. This is why `device_registry` names a class by module and class as
+strings rather than importing it, and it is checked rather than hoped for —
+`test_generating_an_instance_imports_no_epics` generates a whole cell in a
+subprocess and fails if anything of EPICS was pulled in behind it.
 
 Nothing above knows the domain, the number of volumes, or the shape of the
 machine. That used to be checked by hand-building one deliberately different
@@ -379,7 +439,9 @@ does. `start_ioc.py` stubs the four things that *start* an IOC — `LoadDatabase
 `iocInit`, `interactive_ioc`, `AsyncioDispatcher` — while it `exec`s each file,
 which is `dbdump`'s trick with the stubs put back afterwards, then starts the
 IOC once over the merged recordset with one tick loop. **The instances need no
-change at all**; keep it that way.
+change at all**; keep it that way. The stubs work because `simulation_loop`
+looks those four up on the softioc module at call time rather than binding them
+at import.
 
 - **Each file gets its own namespace.** Every instance has a `vacuum`, an
   `upstream` and a `dispatcher` at module scope, so one namespace would have
@@ -431,10 +493,17 @@ skill**; it still describes 4.0.1 because other IOCs are still pinned there.
   `longin`.
 
 **A dispatched coroutine that raises dies silently** and the IOC stays up serving
-every PV, so the symptom is frozen readbacks rather than a crash. An instance's
-tick loop should catch per device and log once — check the IOC's stdout for
+every PV, so the symptom is frozen readbacks rather than a crash. The tick loop
+catches per device and logs once — check the IOC's stdout for
 `Simulation failed for …` before suspecting a state machine. Every tickable object
 needs a `prefix` attribute for that loop.
+
+That loop is `simulation_loop.stepForever`, and there is one of it. It used to
+be written out three times — in `generate_ioc`'s FOOTER as a string, in
+`parsedIoc.run` and in `startInstances` — so a fix to it had to be made three
+times and none of the three was tested, because testing any of them meant
+starting an IOC. As one function it is an ordinary coroutine with ordinary
+tests, and `enable_pva=False` is passed in one place instead of three.
 
 ### `.set()` on an output record fires its own `on_update`
 
@@ -454,13 +523,36 @@ pumps flapping between Standby and Waiting.
 
 Groups have to write their members' demand records, because the real templates fan
 out with CA links and a pump started by its group does show Start on its own
-`:START`. Do it through **`device_groups.setDemand`**, which writes only on a
-change and so settles after one extra pass. Every setter reached that way must be
-safe to run twice — they are.
+`:START`. Do it through **`device_groups.acceptDemand`**, and return early when it
+answers `False`:
+
+```python
+def setCon(self, value):
+    if not acceptDemand(self.conPV, value):
+        return          # our own write coming back
+    ...
+```
+
+Writing only on a change is **not** enough on its own. It settles one demand: the
+echo finds its own value already there and stops. Two demands in flight never
+settle — each echo finds the *other* demand's value on the record, so each one
+writes, and each write makes another echo. That was a real bug, reported as a
+valve that opened and closed once a second for ever after a space was opened and
+a group closed underneath it. Two demands in flight is ordinary here: a fan-out
+sleeps through every valve's `OPEN_DELAY`, seconds for a cell, and whatever the
+operator does next lands inside it.
+
+So `acceptDemand` remembers each write and throws away the one callback it causes,
+matched **by value** and in order. Counting the echoes instead would drop the
+operator's second demand, which is the first callback to arrive when two are in
+flight. An echo is not a demand; anything else is one, whatever value it carries.
 
 The trap is invisible before `iocInit`: a script that builds the database and
 calls the setters directly sees no re-entry at all, which is why this was
-originally written down backwards.
+originally written down backwards. `acceptDemand` only expects an echo once
+softioc has a dispatcher, so a unit test and `dbdump` behave as they always did —
+and `tests/test_demands.py` is the one place a running IOC is started to check
+what only a running IOC does.
 
 ## Verifying a change
 
@@ -501,8 +593,10 @@ generating the file from a builder XML, rewriting a parse — expect the diff to
 be empty.** Byte identical, not shape identical: nothing about the database is
 supposed to move. That is a far stronger check than running the IOC and a far
 cheaper one, and it is what verified both rewrites of `builder_xml.py`, the
-whole of `generate_ioc.py` and the port into this module. **Diff before you
-run.**
+whole of `generate_ioc.py`, the port into this module and the move to
+`device_registry.py` — that last one byte identical on four databases at once
+(2130 for SR03C, 2627 for the D2 cell, and both hand-written examples).
+**Diff before you run.**
 For a change to a device class the diff is meant to be non-empty, and is then
 the record-by-record statement of what you changed.
 
@@ -609,9 +703,28 @@ sets its own port, so it needs only the two `EPICS_CAS_*` lines above.
   it may grow a dependency on a volume. If one ever has to move, give the class
   a `tick()` and put it on the instance's tick list. **Both of SR-VA's rack
   files are read** — `common.xml` and the Diamond-II `commonD2.xml` that is
-  replacing it — because cells are moving over one at a time. They differ only
-  in which RGA heads the PLC power cycles, which is the one thing
-  `commonD2Record` overrides.
+  replacing it — because cells are moving over one at a time. They differ in
+  exactly three lines, the RGA power cycle devices, and the difference is not
+  just which heads: `common.xml` writes `SR$(cell)S-VA-RGA-01` and names them
+  in full, while `commonD2.xml` writes `SR$(cell)$(straight1)-VA-RGA-01` and
+  gets the domain from a macro the cell does not quote. **Python has no macro
+  expansion**, so those three cannot be carried as `"$(straight1)-VA-RGA-01"` —
+  that builds a record actually called `SR03$(straight1)-VA-RGA-01`. They are
+  `commonD2Record`'s `straight1`/`girder1`/`girder2` arguments instead,
+  defaulted to what SR-VA's `commonD2` builder class gives them and overridable
+  from the XML by a cell that quotes one. A wrong default is invisible — three
+  good records for heads that do not exist — so
+  `test_the_power_cycle_lines_land_on_heads_the_cell_declares` checks every
+  `:PWRC` against the `rgamv2` heads the same XML declares, rather than against
+  the constant.
+- **A builder tag is given its meaning in exactly one place: `device_registry.py`.**
+  Adding a simulated template is one entry there and the record class it names —
+  see *Adding a template* below. Nothing else has a list of tags, class names or
+  kinds in it, and the things that used to (the parse's `translated` set, the
+  generated file's import block, the generator's and `parsed_ioc`'s class
+  lookups) are all derived from that table now. A second list of any of them is
+  a bug waiting to happen: every one of those could be, and was, edited
+  separately.
 - **Slide pressures in log space** (`vacuumSim.slideLog`). Vacuum covers decades and
   a linear approach spends all its time in the top decade, then appears to stop.
 - **Keep deliberate template infidelities, with a comment saying so.** An ion pump's

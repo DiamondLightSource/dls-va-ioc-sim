@@ -26,9 +26,9 @@ its own :START as well.  Doing that needs care: **on a running IOC `.set()` on
 an output record fires that record's `on_update`**, which is not what
 `interactive_ioc` or an unstarted IOC will show you.  A callback that writes
 its own record therefore calls itself again, and with `always_update=True` it
-never stops - one external caput was measured driving 88523 callbacks.  Write
-demands through setDemand below, which only writes on a change and so settles
-after one extra pass.
+never stops - one external caput was measured driving 88523 callbacks.  Take
+demands through acceptDemand below, which writes the record and then throws
+that write's own callback away.
 
 The `delay` a real group staggers its members by is accepted and recorded but
 not slept through: the templates spread the inrush current of eight supplies
@@ -38,7 +38,10 @@ sleeping in a callback would stall every other device.  The :STARTING,
 published, they just go up and down within the one call.
 """
 
-from softioc import builder
+from collections import deque
+from weakref import WeakKeyDictionary
+
+from softioc import builder, device
 
 
 def readings(members, field):
@@ -62,22 +65,73 @@ def median(members, field):
     return values[len(values) // 2]
 
 
-def setDemand(record, value):
-    """Write an output record without setting its own callback off again.
+# Every demand this simulation has written to an output record and not yet seen
+# come back, per record, in the order it was written.  See acceptDemand.
+_echoes = WeakKeyDictionary()
+
+
+def expectsEcho():
+    """True once writing an output record calls that record's callback back.
+
+    `iocInit` is what sets softioc's dispatcher, and it is the dispatcher that
+    turns a record processing into an `on_update` call.  Before that - a unit
+    test, or `dbdump` building the database - `.set()` only stores the value
+    and nothing comes back, so there is no echo to wait for.  Expecting one
+    that never arrives would leave it sat in front of a real demand.
+    """
+    return device.dispatcher is not None
+
+
+def acceptDemand(record, value):
+    """Show a demand on its own output record - False if it is our own echo.
 
     A group fanning a demand out wants the member's demand record to show what
     was asked for, the way the template's CA links leave it.  But .set() on an
-    output record fires its on_update, so a callback that writes its own record
-    is called again - for ever, if the record has always_update.  Writing only
-    when the value actually changes breaks that: the second pass finds the
-    value already there, writes nothing, and stops.
+    output record fires its on_update, so the callback that wrote the record is
+    called again one dispatch later, carrying the value it wrote.
 
-    Every setter reached this way has to be safe to run twice.  They all are:
-    starting a pump that is already starting, or closing a valve that is
-    already closed, does nothing.
+    Writing only on a change is not enough to settle that.  It settles *one*
+    demand: the echo finds its own value already on the record, writes nothing,
+    and stops.  Two demands in flight never settle.  Each echo finds the other
+    demand's value on the record, so each one writes, and each write makes
+    another echo, and the two feed each other for ever - a valve seen opening
+    and closing once a second until the IOC was killed.  Two demands in flight
+    is not exotic: a space opening every valve underneath it is seconds of work
+    here, because each valve sleeps through its OPEN_DELAY, and anything an
+    operator does in that time lands in the middle of it.
+
+    So an echo is not a demand, and must do nothing at all.  Each write is
+    remembered here in the order it was made, and the callback it causes is
+    matched against what is expected, dropped, and answered False.  Anything
+    else is a demand - an operator's caput, or a group passing one down -
+    whatever value it carries and however many are already in flight, and is
+    answered in the order it arrived.
+
+    Every caller is the `on_update` of the record it passes, so every one of
+    them uses the answer the same way:
+
+        def setCon(self, value):
+            if not acceptDemand(self.conPV, value):
+                return
+            ...
+
+    Matching the value and not just counting the echoes is what keeps two
+    demands in order.  A group told to close and then open writes 1 and then 0,
+    and both echoes come back behind them; matching on value drops each echo
+    against the write it belongs to, and the record ends up Open.  Counting
+    would drop the first callback it saw - which is the operator's second
+    demand, not an echo at all.
     """
+    expected = _echoes.get(record)
+    if expected and expected[0] == value:
+        expected.popleft()
+        return False
+
     if record.get() != value:
+        if expectsEcho():
+            _echoes.setdefault(record, deque()).append(value)
         record.set(value)
+    return True
 
 
 class deviceGroup:

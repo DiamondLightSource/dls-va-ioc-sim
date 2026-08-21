@@ -9,6 +9,7 @@ subprocess.
 """
 
 import ast
+import builtins
 import os
 import re
 import stat
@@ -64,6 +65,47 @@ def test_generating_twice_gives_the_same_file(declarations):
     assert generate(declarations) == generate(declarations)
 
 
+def calledButNotDefined(source):
+    """Names the instance calls at module level without importing or making.
+
+    This is the failure the import block used to be able to have: it was a
+    hand-kept list beside a generator that emitted class names from a
+    different hand-kept list, so a template added to one and not the other
+    wrote a file that died on the import - and only a subprocess test that
+    happened to build that device would notice.  Both lists come off the
+    registry now, and this is what says so.
+    """
+    tree = ast.parse(source)
+    imported, assigned, called = set(), set(), set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported.update(alias.asname or alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            imported.update(
+                (alias.asname or alias.name).split(".")[0] for alias in node.names
+            )
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                assigned.update(
+                    name.id for name in ast.walk(target) if isinstance(name, ast.Name)
+                )
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            called.add(node.func.id)
+
+    return called - imported - assigned - set(dir(builtins))
+
+
+def test_the_instance_imports_every_class_it_calls(declarations):
+    assert calledButNotDefined(generate(declarations)) == set()
+
+
+def test_a_diamond_two_instance_imports_every_class_it_calls(d2CellXml):
+    """The other rack file, which is the template most recently added and so
+    the one most likely to have been left out of the import block."""
+    assert calledButNotDefined(generate(parseXml(d2CellXml, cell="99"))) == set()
+
+
 def test_the_instance_imports_the_package_not_a_path_hack(declarations):
     source = generate(declarations)
 
@@ -87,14 +129,14 @@ def test_the_layout_is_marked_as_a_guess(declarations):
     # One volume per domain and no gate joining any of them: the XML cannot
     # say which valve stands between which two lengths of pipe.
     assert "a gate() goes here if a valve joins these two" in source
-    for prefix in declarations.valves:
-        assert f'#     gate("{prefix}"),' in source
+    for valve in declarations.valves:
+        assert f'#     gate("{valve.prefix}"),' in source
 
 
 def test_every_valve_is_built_even_though_none_is_a_gate(declarations):
     source = generate(declarations)
-    for prefix in declarations.valves:
-        assert f'valveRecord("{prefix}")' in source
+    for valve in declarations.valves:
+        assert f'valveRecord("{valve.prefix}")' in source
 
 
 def test_the_rack_and_the_plc_are_written_into_the_instance(declarations):
@@ -109,10 +151,34 @@ def test_the_rack_and_the_plc_are_written_into_the_instance(declarations):
 
 def test_a_diamond_two_cell_gets_the_diamond_two_rack(d2CellXml):
     """The instance says which of SR-VA's two rack files the cell was built
-    from, because the class it calls is the one that names the right heads."""
+    from, because the class it calls is the one that names the right heads.
+
+    No macros: the cell quotes none of `$(straight1)`, `$(girder1)` or
+    `$(girder2)`, so the file says only what the XML said and the three heads
+    come from `commonD2Record`'s own defaults."""
     source = generate(parseXml(d2CellXml, cell="99"))
 
-    assert 'commonD2Record("SR99C")' in source
+    assert 'commonD2Record("SR99C")\n' in source
+
+
+def test_a_macro_the_cell_quotes_is_written_into_the_instance(d2CellXml, tmp_path):
+    """`commonD2.xml` names its RGA power cycle devices through macros, and a
+    cell may name one itself. The generated file has to carry it, or the
+    instance would quietly build a power cycle line for the wrong head."""
+    quoted = tmp_path / "quoted.xml"
+    quoted.write_text(
+        d2CellXml.read_text().replace(
+            '<SR-VA.commonD2 dom="SR03C"',
+            '<SR-VA.commonD2 dom="SR03C" straight1="X" girder2="ZZ"',
+        )
+    )
+
+    source = generate(parseXml(quoted, cell="99"))
+
+    assert 'commonD2Record("SR99C", girder2="ZZ", straight1="X")' in source
+    # ...and the one it did not quote is left to the default, not written out
+    # as an empty string.
+    assert "girder1=" not in source
 
 
 def test_the_instance_keeps_the_non_standard_ports(declarations):
@@ -135,10 +201,18 @@ def test_the_instance_serves_no_pvaccess(declarations):
     """pythonSoftIOC starts a PVXS server beside the Channel Access one, which
     offers the same records under the same names and has never heard of
     EPICS_CA_SERVER_PORT. An instance safely on 6064 still answered
-    `pvget SR06A-VA-IONP-01:P` on the standard pvAccess port until this."""
+    `pvget SR06A-VA-IONP-01:P` on the standard pvAccess port until this.
+
+    The instance no longer calls iocInit itself - runSimulation does, and it is
+    the one place enable_pva=False is passed now, which is checked in
+    test_simulation_loop.  What the instance has to do is go through it."""
     source = generate(declarations)
 
-    assert "softioc.iocInit(dispatcher, enable_pva=False)" in source
+    assert "runSimulation(" in source
+    assert "softioc.iocInit" not in source, (
+        "an instance that starts its own IOC is a second place for "
+        "enable_pva to be forgotten"
+    )
 
 
 def test_the_pvaccess_ports_are_moved_too(declarations):
@@ -157,32 +231,45 @@ def test_the_pvaccess_ports_are_moved_too(declarations):
     assert PVA_SERVER_PORT != 5075, "5075 is the real machine's pvAccess port"
 
 
-def test_the_tick_loop_can_say_which_device_failed(declarations):
-    """The instance is written out by a %-format template, so the tick loop's
-    own %s has to survive being generated - and it did not. A bare conversion
-    took the whole mapping, so the line came out as
+def test_nothing_in_the_instance_was_eaten_by_the_format_template(declarations):
+    """HEADER and FOOTER are %-format templates, so a literal % in one has to
+    be doubled.  The one that was not took the tick loop's own message out:
 
         logging.exception("Simulation failed for {'volume': 'sr99s'}", ...)
 
-    which raises inside logging and loses the device name at exactly the
-    moment a device has failed and every readback has frozen."""
+    because a bare %s takes the whole mapping.  That line lives in
+    simulation_loop now rather than in a template, but the hazard belongs to
+    the templates, so this checks the substitution left nothing behind - a
+    stray conversion shows up as a dict repr or an unfilled %(name)s."""
     source = generate(declarations)
 
-    logged = re.search(r'logging\.exception\("([^"]*)"', source)
-    assert logged, "the tick loop has to log the device that failed"
-    message = logged.group(1)
+    assert not re.search(r"%\(\w+\)s", source), "an unsubstituted conversion"
+    assert "{'volume'" not in source, "a bare %s took the whole mapping"
+    for line in source.splitlines():
+        # A doubled %% in a template comes out as a single % in the file, and
+        # every one left should be inside a string or a comment, not a
+        # conversion that got away.
+        assert "%s" not in line or line.lstrip().startswith("#"), line
 
-    # Formatted the way logging formats it: msg % args, args being a tuple.
-    assert message % ("SR99A-VA-IONP-01",) == "Simulation failed for SR99A-VA-IONP-01"
 
-
-def test_the_ports_are_set_before_softioc_is_imported(declarations):
+def test_the_ports_are_set_before_anything_that_imports_softioc(declarations):
     """Whatever libca reads them at, the ports have to be in the environment
-    before anything of EPICS starts up, and this is the order that was
-    tested."""
+    before anything of EPICS starts up, and this is the order that was tested.
+
+    The instance imports no softioc name of its own any more, so the thing to
+    be after is the *first* import of this package - every one of which reaches
+    softioc through the record classes."""
     source = generate(declarations)
 
-    assert source.index("EPICS_CA_SERVER_PORT") < source.index("from softioc import")
+    assert source.index("EPICS_CA_SERVER_PORT") < source.index("from dls_va_ioc_sim")
+
+    above = source[: source.index("EPICS_CA_SERVER_PORT")].splitlines()
+    imported = [
+        line for line in above if line.startswith("import ") or line.startswith("from ")
+    ]
+    assert imported == ["import os"], (
+        "nothing but os may be imported above the ports: " + repr(imported)
+    )
 
 
 def test_the_instance_is_its_own_launcher(declarations):

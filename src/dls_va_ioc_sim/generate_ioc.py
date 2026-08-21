@@ -46,7 +46,14 @@ import sys
 from pathlib import Path
 
 from ._version import __version__
-from .builder_xml import GROUP_KINDS, parseXml
+from .builder_xml import parseXml
+from .device_registry import (
+    GROUP_BY_KIND,
+    GROUP_KINDS,
+    TEMPLATES,
+    deviceSection,
+    importsFor,
+)
 from .epics_ports import (
     CA_REPEATER_PORT,
     CA_SERVER_PORT,
@@ -62,21 +69,15 @@ FAMILY_NAMES = {
     "GVALV": "gvalv", "SPACE": "space", "RGA": "rga", "VLVCC": "plc",
 }
 
-# Group kind -> the class the generated file calls, and what it takes its
-# members from.  A gauge group takes the gauge, an IMG group the gauge's img.
-# Which of SR-VA's two rack files a cell was built from -> the class for it.
-COMMON_CALLS = {
-    "common": "commonRecord",
-    "commonD2": "commonD2Record",
-}
-
-GROUP_CALLS = {
-    "ionp": ("ionPumpGroupRecord", None),
-    "gauge": ("gaugeGroupRecord", None),
-    "img": ("imgGroupRecord", "img"),
-    "pirg": ("pirgGroupRecord", "pirg"),
-    "valve": ("valveGroupRecord", None),
-}
+# What a generated instance needs that is not a device class: the framework's
+# own helpers.  Everything else it imports is derived from the registry, so a
+# template added there cannot arrive without its import line.
+FRAMEWORK_IMPORTS = (
+    ("builder_xml", ("attachLayout",)),
+    ("device_groups", ("orderedGroups",)),
+    ("simulation_loop", ("runSimulation",)),
+    ("vacuum_model", ("gate", "vacuumLayout", "vacuumVolume")),
+)
 
 DOMAIN_PATTERN = re.compile(r"^([A-Z]{2,3})(\d{2})(.*)$")
 
@@ -86,6 +87,11 @@ DOMAIN_PATTERN = re.compile(r"^([A-Z]{2,3})(\d{2})(.*)$")
 # came out of the substitution as "Simulation failed for {'volume': 'sr06s'}",
 # because a bare %s takes the whole mapping.  That raises inside logging and
 # loses the device name at exactly the moment a device has failed.
+#
+# That line is not here any more - the tick loop it was part of is
+# simulation_loop.runSimulation, written once and imported by the instance
+# rather than written into it - but the hazard is the templates', not that
+# line's, so the rule still stands for whatever is put in them next.
 
 HEADER = '''#!/usr/bin/env -S uv run --script
 # /// script
@@ -117,9 +123,10 @@ import os
 
 # Channel Access is served on a non-standard port, for the same reason the cell
 # number in every device name is rewritten: a client looking for the real
-# machine must never find this instead.  It is set here, before anything of
-# softioc is imported, rather than by a wrapper script, so that there is no way
-# to start this file on the real machine's port by forgetting something.
+# machine must never find this instead.  It is set here, above every import
+# below - each of which reaches softioc - rather than by a wrapper script, so
+# that there is no way to start this file on the real machine's port by
+# forgetting something.
 #
 # The pvAccess ports are moved for the same reason.  This IOC serves no
 # pvAccess at all - iocInit is called with enable_pva=False at the bottom of
@@ -138,25 +145,7 @@ os.environ.setdefault("EPICS_CA_REPEATER_PORT", "%(repeaterPort)d")
 os.environ.setdefault("EPICS_PVAS_SERVER_PORT", "%(pvaPort)d")
 os.environ.setdefault("EPICS_PVAS_BROADCAST_PORT", "%(pvaBroadcast)d")
 
-import asyncio
-import logging
-
-from softioc import softioc, builder, asyncio_dispatcher
-
-from dls_va_ioc_sim.builder_xml import attachLayout
-from dls_va_ioc_sim.device_groups import orderedGroups
-from dls_va_ioc_sim.fe_seq_records import valveGroupRecord, valveRecord
-from dls_va_ioc_sim.gauge_records import (gaugeGroupRecord, gaugeSetRecord,
-                                         imgGroupRecord, pirgGroupRecord)
-from dls_va_ioc_sim.ion_pump_records import (ionPumpGroupRecord, ionPumpRecord,
-                                           mpcRecord)
-from dls_va_ioc_sim.rack_records import (commonD2Record, commonRecord,
-                                        plcInfoRecord)
-from dls_va_ioc_sim.rga_records import rgaRecord
-from dls_va_ioc_sim.vacuum_model import gate, vacuumLayout, vacuumVolume
-from dls_va_ioc_sim.vacuum_space_records import spaceRecord
-
-dispatcher = asyncio_dispatcher.AsyncioDispatcher()
+%(imports)s
 
 # How often the simulated devices recalculate their readbacks.  One second
 # matches the SCAN rate the real templates poll their hardware at.
@@ -172,50 +161,16 @@ FOOTER = '''
 simulatedDevices = ([vacuum] + ionPumps + gaugeSets
                     + orderedGroups(vacuumGroups) + vacuumSpaces)
 
-# Boilerplate to get the IOC started.
-#
-# enable_pva=False because pythonSoftIOC would otherwise start a PVXS/QSRV2
-# server beside the Channel Access one, serving every record built above under
-# its own name on the standard pvAccess port - where a client looking for the
-# real machine would find it, whatever the Channel Access ports are set to.
-builder.LoadDatabase()
-softioc.iocInit(dispatcher, enable_pva=False)
-
-
-async def simulate():
-    """Step every simulated device on a fixed period, for as long as we run.
-
-    The devices are taken from the module rather than passed in as arguments:
-    the dispatcher hands extra arguments to the coroutine differently
-    depending on the pythonSoftIOC version, and passing none at all behaves
-    the same on both.
-    """
-    reported = set()
-    while True:
-        await asyncio.sleep(SIMULATION_PERIOD)
-        for device in simulatedDevices:
-            try:
-                device.tick(SIMULATION_PERIOD)
-            except Exception:
-                # A dispatched coroutine that raises is dropped without a
-                # word, which leaves the IOC up but every readback frozen.
-                # Say so, once per device, and keep the others going.
-                if device.prefix not in reported:
-                    reported.add(device.prefix)
-                    logging.exception("Simulation failed for %%s",
-                                      device.prefix)
-
-
-dispatcher(simulate)
-
-# Finally leave the IOC running with an interactive shell.  The volumes are in
-# scope there, which is where a leak is sprung now that none of the vacuum
-# model is served:
+# Load the database, start the IOC without pvAccess, and step the devices above
+# once a second until this is killed - see simulation_loop, which every
+# simulation ends by calling.  globals() is what puts the volumes in scope in
+# the interactive shell, which is where a leak is sprung now that none of the
+# vacuum model is served:
 #
 #   >>> %(volume)s.gasLoad = 1.0e-4        a leak the pumps hold against
 #   >>> %(volume)s.forcedPressure = 1e-3   pin it, and its group with it
 #   >>> %(volume)s.forcedPressure = None   back to the model
-softioc.interactive_ioc(globals())
+runSimulation(simulatedDevices, period=SIMULATION_PERIOD, namespace=globals())
 '''
 
 
@@ -256,6 +211,68 @@ class names:
         self.taken.add(candidate)
         self.byPrefix[prefix] = candidate
         return candidate
+
+
+# The banners a generated instance's simple devices are written under, in the
+# order they appear in it.  A device_registry.deviceTemplate names one of these
+# in its `section`, so adding a template puts it under the right banner with
+# nothing to edit here; only a template that wants a banner of its own needs a
+# new entry, and it brings the words for it.
+#
+# `variable` is the list the devices are collected into afterwards.  The valves
+# have none here on purpose: theirs is written out beside attachLayout further
+# down, which is the only thing that uses it.
+
+DEVICE_SECTIONS = (
+    deviceSection("valves", """
+# ---------------------------------------------------------------------------
+# Valves
+#
+# Which of these stands in the beam pipe and which branches off it is not in
+# the XML - it is decided in the vacuum layout below.
+# ---------------------------------------------------------------------------
+"""),
+    deviceSection("rgas", """
+# ---------------------------------------------------------------------------
+# RGAs
+#
+# rgaRecord only builds :STA - see its module docstring for why.  An RGA
+# takes no gas load and pumps nothing, so it is not part of the vacuum layout
+# below and needs no tick: :STA is set once, at construction.
+# ---------------------------------------------------------------------------
+""", variable="rgas"),
+    deviceSection("rack", """
+# ---------------------------------------------------------------------------
+# The rack and the PLC
+#
+# Not vacuum devices and not on the layout below: the fans, the 24 V supplies
+# and the PLC's own health are what a cell overview shows beside the vacuum,
+# and they are here so that a screen has something to read.  Every value is
+# set once and stays there - see rack_records.
+# ---------------------------------------------------------------------------
+"""),
+)
+
+
+def deviceVariables(section, declarations, naming):
+    """(variable, template, declaration) for one banner, in registry order.
+
+    Most devices are named after themselves - SR99A-VA-VALVE-01 becomes
+    valveA01, so it can be found by eye from its PV name.  A template with a
+    `variableStem` is named after the stem instead and numbered from two, for
+    a device whose name has no family in it to build one from: a whole cell's
+    rack is `common`, because "SR03C" would give something like `deviceC`.
+    """
+    used = {}
+    for template in section.templates:
+        for declaration in declarations.devicesOfKind(template.kind):
+            stem = template.variableStem
+            if stem:
+                used[stem] = used.get(stem, 0) + 1
+                variable = stem if used[stem] == 1 else f"{stem}{used[stem]}"
+            else:
+                variable = naming.of(declaration.prefix)
+            yield variable, template, declaration
 
 
 def _gaugeOf(prefix):
@@ -326,8 +343,8 @@ def layoutSource(declarations, naming=None):
     lines.append(")")
     lines.append("")
     lines.append("# The valves this IOC builds, none of them yet a gate:")
-    for prefix in declarations.valves:
-        lines.append(f'#     gate("{prefix}"),')
+    for valve in declarations.valves:
+        lines.append(f'#     gate("{valve.prefix}"),')
     return "\n".join(lines), volumes
 
 
@@ -407,6 +424,45 @@ def scriptSources():
     )
 
 
+def importBlock():
+    """Everything a generated instance imports, as source.
+
+    The device classes come off the registry rather than being written out
+    here, which is what stopped this list and the classes the generator
+    actually calls from being two lists: an instance that named a class the
+    import block had not heard of died on the import, and only a subprocess
+    test that happened to build that device would catch it.
+    """
+    modules = dict(importsFor(TEMPLATES))
+    for module, names in FRAMEWORK_IMPORTS:
+        modules[module] = tuple(sorted(set(modules.get(module, ())) | set(names)))
+
+    lines = []
+    for module in sorted(modules):
+        lines.extend(_importLine(module, list(modules[module])))
+    return "\n".join(lines)
+
+
+def _importLine(module, names, width=79):
+    """One import, wrapped under its own opening paren if it will not fit."""
+    opening = f"from {PACKAGE}.{module} import "
+    single = opening + ", ".join(names)
+    if len(single) <= width:
+        return [single]
+
+    opening += "("
+    pad = " " * len(opening)
+    lines, line = [], opening
+    for index, name in enumerate(names):
+        piece = name + ("," if index < len(names) - 1 else ")")
+        if len(line) + len(piece) > width and line != opening:
+            lines.append(line.rstrip())
+            line = pad
+        line += piece + " "
+    lines.append(line.rstrip())
+    return lines
+
+
 def generate(declarations, iocName=None, instance=None):
     """Write the whole instance out as Python.
 
@@ -424,6 +480,7 @@ def generate(declarations, iocName=None, instance=None):
         "source": declarations.source,
         "requirement": requirement(),
         "sources": scriptSources(),
+        "imports": importBlock(),
         "instance": instance,
         "serverPort": CA_SERVER_PORT,
         "repeaterPort": CA_REPEATER_PORT,
@@ -497,55 +554,28 @@ def generate(declarations, iocName=None, instance=None):
                          for gaugeSet in declarations.gaugeSets
                          for name in gaugeSet.deviceNames("GAUGE")], "]"))
 
-    # --- valves --------------------------------------------------------------
-    out.append("""
-# ---------------------------------------------------------------------------
-# Valves
-#
-# Which of these stands in the beam pipe and which branches off it is not in
-# the XML - it is decided in the vacuum layout below.
-# ---------------------------------------------------------------------------
-""")
-    for prefix in declarations.valves:
-        out.append(f'{naming.of(prefix)} = valveRecord("{prefix}")')
-
-    # --- RGAs ------------------------------------------------------------------
-    out.append("""
-# ---------------------------------------------------------------------------
-# RGAs
-#
-# rgaRecord only builds :STA - see its module docstring for why.  An RGA
-# takes no gas load and pumps nothing, so it is not part of the vacuum layout
-# below and needs no tick: :STA is set once, at construction.
-# ---------------------------------------------------------------------------
-""")
-    for rga in declarations.rgas:
-        out.append(f'{naming.of(rga.prefix)} = rgaRecord("{rga.prefix}")')
-    out.append("")
-    out.extend(_wrapped("rgas = [",
-                        [naming.of(rga.prefix) for rga in declarations.rgas],
-                        "]"))
-
-    # --- the rack and the PLC ------------------------------------------------
-    out.append("""
-# ---------------------------------------------------------------------------
-# The rack and the PLC
-#
-# Not vacuum devices and not on the layout below: the fans, the 24 V supplies
-# and the PLC's own health are what a cell overview shows beside the vacuum,
-# and they are here so that a screen has something to read.  Every value is
-# set once and stays there - see rack_records.
-# ---------------------------------------------------------------------------
-""")
-    for plc in declarations.plcs:
-        out.append(f'{naming.of(plc.prefix)} = plcInfoRecord("{plc.prefix}")')
-    for index, common in enumerate(declarations.commons):
-        # One line of XML per cell, and one here: the class builds the whole
-        # of SR-VA's rack file for the domain it is given, and which class it
-        # is says which of the two files the cell was built from.
-        variable = "common" if not index else f"common{index + 1}"
-        call = COMMON_CALLS[common.kind]
-        out.append(f'{variable} = {call}("{common.dom}")')
+    # --- the simple devices, off the registry --------------------------------
+    #
+    # Valves, RGAs, the PLC link and the cell's rack: one element of XML and
+    # one call each, so the table writes them rather than this function.  A
+    # template added to device_registry.DEVICES lands here on its own.
+    for section in DEVICE_SECTIONS:
+        out.append(section.banner)
+        written = []
+        for variable, template, declaration in deviceVariables(
+                section, declarations, naming):
+            # A macro the cell quoted is written out beside the name; one it
+            # did not is left to the class's own default, so the file says
+            # what the XML said and no more.
+            arguments = "".join(f', {macro}="{value}"'
+                                for macro, value
+                                in sorted(declaration.arguments.items()))
+            out.append(f'{variable} = {template.className}'
+                       f'("{declaration.prefix}"{arguments})')
+            written.append(variable)
+        if section.variable:
+            out.append("")
+            out.extend(_wrapped(f"{section.variable} = [", written, "]"))
 
     # --- the layout ----------------------------------------------------------
     layout, volumes = layoutSource(declarations, naming)
@@ -587,7 +617,8 @@ def generate(declarations, iocName=None, instance=None):
     out.append(layout)
     out.append("")
     out.extend(_wrapped("valves = [",
-                        [naming.of(prefix) for prefix in declarations.valves],
+                        [naming.of(valve.prefix)
+                         for valve in declarations.valves],
                         "]"))
     out.append("")
     out.append("attachLayout(vacuum, ionPumps + gauges + valves)")
@@ -609,7 +640,8 @@ def generate(declarations, iocName=None, instance=None):
     groupNames = []
     groupPrefixes = {group.prefix for group in declarations.groups}
     for group in declarations.groups:
-        call, attribute = GROUP_CALLS[group.kind]
+        template = GROUP_BY_KIND[group.kind]
+        call, attribute = template.className, template.via
         groupNames.append(naming.of(group.prefix))
         members = []
         for member in group.members:

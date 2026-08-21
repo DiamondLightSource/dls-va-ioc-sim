@@ -61,13 +61,25 @@ DUPLEX_SUPPLIES = (
 )
 POWER_CYCLED_RGAS = ("S-VA-RGA-01", "A-VA-RGA-01", "A-VA-RGA-02")
 
-# Diamond-II moves the heads: commonD2.xml asks for RGA-01 in a straight and
-# two girder domains rather than one in S and two in A, and names them through
-# $(straight1), $(girder1) and $(girder2).  These are the values those macros
-# take in the D2 cells written so far - SR03C declares exactly these three as
-# its rgamv2 heads - and they are the one thing that differs between the two
-# files, which are otherwise identical line for line.
-D2_POWER_CYCLED_RGAS = ("S-VA-RGA-01", "SM-VA-RGA-01", "MS-VA-RGA-01")
+# Diamond-II moves the heads onto RGA-01 in a straight and two girder domains,
+# and - unlike common.xml, which writes S, A and A in full - names them through
+# macros:
+#
+#     device="SR$(cell)$(straight1)-VA-RGA-01"     and the same for the girders
+#
+# So these three are *macro defaults*, not device names: the values SR-VA's
+# commonD2 builder class gives $(straight1), $(girder1) and $(girder2) for a
+# cell that does not quote them, which is every D2 cell written so far.  A
+# cell that does quote one overrides it - see commonD2Record, which takes all
+# three - and `SR-VA.commonD2`'s registry entry reads them off the XML.
+#
+# They are what SR03C declares as its three rgamv2 heads, which is the check:
+# the power cycle lines have to land on heads the same cell declares, and
+# test_the_power_cycle_lines_land_on_heads_the_cell_declares asserts it off
+# the fixture rather than off this tuple.
+D2_STRAIGHT1 = "S"
+D2_GIRDER1 = "SM"
+D2_GIRDER2 = "MS"
 
 
 class plcInfoRecord:
@@ -253,12 +265,15 @@ class commonRecord:
 
     commonD2Record below is the Diamond-II file, and differs only in which
     heads the power cycle lines go to.
+
+    `rgas` is those heads, as the suffixes that follow SR<cell>.  common.xml
+    writes them in full, so the default is a fact rather than a guess; it is a
+    parameter only because commonD2Record has to work its own three out.
     """
 
-    RGAS = POWER_CYCLED_RGAS
-
-    def __init__(self, dom):
+    def __init__(self, dom, rgas=POWER_CYCLED_RGAS):
         self.prefix = dom
+        self.rgas = rgas
         self.dom = dom
         # SR03C -> 03.  The RGAs are in this cell's S and A domains rather
         # than in the C domain the IOC is named for, which is why common.xml
@@ -282,18 +297,38 @@ class commonRecord:
         ]
 
         self.rgaPowerCycles = [
-            rgaPowerCycleRecord(f"SR{self.cell}{suffix}") for suffix in self.RGAS
+            rgaPowerCycleRecord(f"SR{self.cell}{suffix}") for suffix in self.rgas
         ]
 
 
 class commonD2Record(commonRecord):
     """The Diamond-II rack - SR-VA.commonD2, etc/makeIocs/commonD2.xml.
 
-    The same rack, and the same class: the two files differ in three lines out
-    of thirty, which are the RGA power cycle devices.  Subclassing rather than
-    passing the names in keeps the generated instance saying which of the two
-    files a cell was built from, the way the XML does - SR-VA models this as
-    two templates and one builder object apiece, and so does this.
+    The same rack, and almost the same class: the two files differ in three
+    lines out of thirty, which are the RGA power cycle devices.  Subclassing
+    rather than passing the names in keeps the generated instance saying which
+    of the two files a cell was built from, the way the XML does - SR-VA models
+    this as two templates and one builder object apiece, and so does this.
+
+    Where common.xml writes those three devices in full, commonD2.xml writes
+    them through `$(straight1)`, `$(girder1)` and `$(girder2)`, so they are
+    arguments here rather than a constant.  A cell that quotes one on its
+    `<SR-VA.commonD2 .../>` element gets it; every cell written so far quotes
+    none, and gets the defaults above - which is what a macro with a default
+    means, and what the builder class this expands through will do.
+
+    They are the one thing to change if those macros settle differently.
     """
 
-    RGAS = D2_POWER_CYCLED_RGAS
+    def __init__(
+        self, dom, straight1=D2_STRAIGHT1, girder1=D2_GIRDER1, girder2=D2_GIRDER2
+    ):
+        super().__init__(
+            dom,
+            rgas=tuple(
+                f"{domain}-VA-RGA-01" for domain in (straight1, girder1, girder2)
+            ),
+        )
+        self.straight1 = straight1
+        self.girder1 = girder1
+        self.girder2 = girder2

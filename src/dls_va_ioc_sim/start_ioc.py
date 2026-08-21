@@ -25,8 +25,6 @@
 #
 #     >>> instances["sr06c-va-ioc-01.py"]["upstream"].gasLoad = 1.0e-4
 
-import asyncio
-import logging
 import os
 
 import epicsdbbuilder
@@ -34,8 +32,7 @@ from softioc import asyncio_dispatcher, builder, softioc
 from softioc.imports import callbackSetQueueSize
 
 from .epics_ports import setPortDefaults
-
-SIMULATION_PERIOD = 1.0
+from .simulation_loop import SIMULATION_PERIOD, runSimulation
 
 # Every .set() from the tick loop queues a record process on EPICS's cbLow
 # ring, which defaults to 2000 entries.  One cell never comes near that; 24
@@ -152,38 +149,16 @@ def startInstances(paths, period=None, interactive=True, queueSize=None, log=Non
         + ", ".join(instances)
     )
 
-    builder.LoadDatabase()
-    # Has to be before iocInit, which is where EPICS creates the ring.
-    callbackSetQueueSize(queueSize or callbackQueueSize(records))
-
-    dispatcher = asyncio_dispatcher.AsyncioDispatcher()
-    # enable_pva=False: pythonSoftIOC would otherwise start a PVXS/QSRV2 server
-    # beside the Channel Access one, serving every record of every cell under
-    # its own name on the standard pvAccess port, which no EPICS_CA_* setting
-    # moves.  A whole simulated ring on 5075 is what this stops.
-    softioc.iocInit(dispatcher, enable_pva=False)
-
-    async def simulate():
-        # No arguments: the dispatcher hands extra ones to the coroutine
-        # differently depending on the pythonSoftIOC version, and passing none
-        # at all behaves the same on both.
-        reported = set()
-        while True:
-            await asyncio.sleep(period)
-            for device in devices:
-                try:
-                    device.tick(period)
-                except Exception:
-                    # A dispatched coroutine that raises is dropped without a
-                    # word, which leaves the IOC up but every readback frozen.
-                    # Say so, once per device, and keep the others going.
-                    if device.prefix not in reported:
-                        reported.add(device.prefix)
-                        logging.exception("Simulation failed for %s", device.prefix)
-
-    dispatcher(simulate)
-
-    if interactive:
-        softioc.interactive_ioc({"instances": instances, "devices": devices})
-    else:
-        softioc.non_interactive_ioc()
+    # The same start-up and the same tick loop as one instance uses - see
+    # simulation_loop.  Sizing the callback ring is the one thing `start` does
+    # that a single instance does not, and it has to happen after the database
+    # is loaded and before iocInit, which is where EPICS creates the ring.
+    runSimulation(
+        devices,
+        period=period,
+        interactive=interactive,
+        namespace={"instances": instances, "devices": devices},
+        beforeIocInit=lambda: callbackSetQueueSize(
+            queueSize or callbackQueueSize(records)
+        ),
+    )

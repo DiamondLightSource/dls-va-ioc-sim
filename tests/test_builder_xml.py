@@ -9,6 +9,11 @@ RECOGNISED - and a change that starts building RGAs or PLC glue shows up here.
 from dls_va_ioc_sim.builder_xml import UNRECOGNISED, parseXml
 
 
+def names(declarations, kind):
+    """The prefixes of every simple device of one registry kind."""
+    return [device.prefix for device in declarations.devicesOfKind(kind)]
+
+
 def test_the_cell_is_renamed_so_it_cannot_be_the_real_machine(cellXml):
     declarations = parseXml(cellXml, cell="99")
 
@@ -79,9 +84,10 @@ def test_the_plc_and_the_cell_rack_are_read_off_the_xml(cellXml):
     rack of fans and 24 V supplies named after the cell."""
     declarations = parseXml(cellXml, cell="99")
 
-    assert [plc.prefix for plc in declarations.plcs] == ["SR99C-VA-VLVCC-01"]
-    assert [common.dom for common in declarations.commons] == ["SR99C"]
-    assert [common.kind for common in declarations.commons] == ["common"]
+    assert names(declarations, "plc") == ["SR99C-VA-VLVCC-01"]
+    # A rack is named by the domain every device in it is named after.
+    assert names(declarations, "common") == ["SR99C"]
+    assert names(declarations, "commonD2") == []
 
 
 def test_the_diamond_two_rack_is_read_as_its_own_kind(d2CellXml):
@@ -90,8 +96,8 @@ def test_the_diamond_two_rack_is_read_as_its_own_kind(d2CellXml):
     parse - the two files put the RGA power cycle lines on different heads."""
     declarations = parseXml(d2CellXml, cell="99")
 
-    assert [common.kind for common in declarations.commons] == ["commonD2"]
-    assert [common.dom for common in declarations.commons] == ["SR99C"]
+    assert names(declarations, "commonD2") == ["SR99C"]
+    assert names(declarations, "common") == []
 
 
 def test_a_diamond_two_cell_has_nothing_unrecognised_in_it_either(d2CellXml):

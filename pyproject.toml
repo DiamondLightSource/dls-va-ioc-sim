@@ -165,6 +165,13 @@ lint.ignore = [
     # SR03A-VA-GIONP-01 becomes gionpA01 - so that a device can be found in the
     # file by eye from its PV name.  Every instance is full of them.
     "N816", # variables in global scope should not be mixedCase
+    # The same convention again, for the same reason.  This one only started
+    # firing when the declarations became dataclasses: `builderName` was an
+    # attribute assigned in __init__ before and is a field declared in the
+    # class body now, which is the same name in the same style but a different
+    # rule.  Renaming them would leave the dataclasses the one place in the
+    # codebase that is snake_case.
+    "N815", # variables in class scope should not be mixedCase
 ]
 
 [tool.ruff.format]

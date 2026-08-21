@@ -58,7 +58,7 @@ from typing import Any
 
 from softioc import alarm, builder
 
-from .device_groups import deviceGroup, highest, lowest, setDemand
+from .device_groups import acceptDemand, deviceGroup, highest, lowest
 from .vacuum_sim import clamp, jitter
 
 # What a gauge's readbacks are seeded with before the first tick, for the same
@@ -545,13 +545,17 @@ class imgRecord:
 
         The method exists so that a group does not have to know whether its
         member is a gauge or another group; update() reads :CCHV each pass, so
-        writing the record is all there is to do.
+        writing the record is all there is to do.  Nothing follows the write,
+        so there is nothing for an echo to be stopped from doing and no answer
+        to check - anything added below here needs the early return every other
+        setter has.
         """
-        setDemand(self.cchvPV, 1 if value else 0)
+        acceptDemand(self.cchvPV, 1 if value else 0)
 
     def setPro(self, value):
         """:PRO:SETSP - the overpressure the controller protects against."""
-        setDemand(self.proOutSetpointPV, value)
+        if not acceptDemand(self.proOutSetpointPV, value):
+            return
         self.proSetpointPV.set(value)
 
     def interlocked(self, controllingPressure):
@@ -751,7 +755,8 @@ class relayRecord:
 
     def setDemand(self, value):
         """Set the ON setpoint the way a client writing :SETSP would."""
-        setDemand(self.setSetpointPV, value)
+        if not acceptDemand(self.setSetpointPV, value):
+            return
         self.setSetpoint(value)
 
     def setEnable(self, value):
@@ -763,7 +768,8 @@ class relayRecord:
         reachable through the relay's own :SETMODE.
         """
         mode = RELAY_ON if value == ENABLE_FORCE_ON else RELAY_ACTIVE
-        setDemand(self.setModePV, mode)
+        if not acceptDemand(self.setModePV, mode):
+            return
         self.modePV.set(mode)
 
     def addAliases(self):
@@ -1125,7 +1131,8 @@ class imgGroupRecord(deviceGroup):
 
     def setCchv(self, value):
         """Strike or drop every cold cathode underneath this group."""
-        setDemand(self.cchvPV, 1 if value else 0)
+        if not acceptDemand(self.cchvPV, 1 if value else 0):
+            return
         self.switchingPV.set(1)
         try:
             for member in self.members:
@@ -1134,7 +1141,8 @@ class imgGroupRecord(deviceGroup):
             self.switchingPV.set(0)
 
     def setPro(self, value):
-        setDemand(self.proSetSetpointPV, value)
+        if not acceptDemand(self.proSetSetpointPV, value):
+            return
         for member in self.members:
             member.setPro(value)
         self.proSetpointPV.set(value)
@@ -1211,13 +1219,15 @@ class pirgGroupRecord(deviceGroup):
     # -- demands fanned out to the members ------------------------------------
 
     def setCtlSetpoint(self, value):
-        setDemand(self.ctlSetSetpointPV, value)
+        if not acceptDemand(self.ctlSetSetpointPV, value):
+            return
         for member in self.members:
             member.setCtlSetpoint(value)
         self.ctlSetpointPV.set(value)
 
     def setCtlEnable(self, value):
-        setDemand(self.ctlEnablePV, value)
+        if not acceptDemand(self.ctlEnablePV, value):
+            return
         for member in self.members:
             member.setCtlEnable(value)
 
@@ -1337,13 +1347,15 @@ class groupRelayRecords:
         self.setpointPV.set(value)
 
     def setEnable(self, value):
-        setDemand(self.enablePV, value)
+        if not acceptDemand(self.enablePV, value):
+            return
         for relay in self.relays():
             relay.setEnable(value)
 
     def setDemand(self, value):
         """Forward a demand from the group above this one."""
-        setDemand(self.setSetpointPV, value)
+        if not acceptDemand(self.setSetpointPV, value):
+            return
         self.setSetpoint(value)
 
     def publish(self):
