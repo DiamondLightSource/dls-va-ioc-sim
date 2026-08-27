@@ -158,6 +158,13 @@ used to share a name**, and separating them is what this design is about.
   pressure, a status lamp, and controls. It owns nothing at all — every record
   either reads a group or writes to one.
 
+**Which groups a space covers is written down only in its link fields**, on the
+real IOC and here. There is no record holding the five names, so anything
+working out what a space is made of has to read `SPACE-nn:IONPSTA.INPA` and the
+rest of them — which is why every record of the template that *reads* a group is
+built here as that link rather than copied in Python. See *Spaces link, groups
+are copied* below.
+
 So the beam pipe and the operator's view are decided independently. A space
 covers whatever its five groups cover, which may be one gauge or a whole
 straight; the volumes say only which devices are physically breathing the same
@@ -276,6 +283,54 @@ because that is where a space's builder XML gets its groups from and there is no
 them on numbered relays. So `:RLY:` is relay 1 (valve interlock), `:RLA:` is
 relay 2 (MPS interlock), `:RLB:` is the Pirani's relay 1 (ion pump interlock).
 `:PRO:ENABLE` is the one record with nowhere to go and is not created.
+
+## Spaces link, groups are copied
+
+**A group aggregates in Python; a space does not aggregate at all, so it links.**
+Every record `space.template` gives an input link is built here as that link —
+`:P`, `:PLOG`, `:IMGSTA`, `:IONPSTA`, `:VALVESTA`, `:PSTA`, `:CALSTA`,
+`:CTL:SP`, `:PRO:SP`, the three `:RL?:SP` and `:STARTING`/`:OPENING`/
+`:SWITCHING` — scanning at a second, straight off the group. Every record it
+gives an *output* link stays in Python, because a group fans a demand out by
+calling its members' methods and a database link would take the write out of
+reach of `acceptDemand`.
+
+That is not tidiness, it is the interface. **The link fields are the only place
+a vacuum space records which groups it covers**, so a script that reads
+`SPACE-nn:IONPSTA.INPA` off a real cell has to get the same answer here:
+
+```
+SR03C-VA-SPACE-01:IONPSTA.INPA  -> SR03C-VA-GIONP-01:STA NPP NMS   # ionp
+SR03C-VA-SPACE-01:IMGSTA.INPA   -> SR03C-VA-GIMG-01:STA NPP NMS    # img
+SR03C-VA-SPACE-01:VALVESTA.INPA -> SR03C-VA-GVALV-01:STA NPP MS    # valve
+SR03C-VA-SPACE-01:P.INP         -> SR03C-VA-GGAUG-01:P NPP NMS     # gauge
+SR03C-VA-SPACE-01:CTL:SP.INP    -> SR03C-VA-GPIRG-01:CTL:SP NPP MS # pirg
+```
+
+Two tests hold that: `test_a_space_says_which_groups_it_covers_where_the_real_ioc_does`
+checks each of the five macros against the group the builder XML declares — so a
+link moved to a PV of its own fails — and
+`test_every_link_a_space_carries_names_a_record_the_ioc_builds` resolves every
+one of them against the same database, because a link naming nothing is silent:
+EPICS makes it a channel access link and the record sits INVALID with no error.
+
+**The one deviation is `SCAN` on `:CALSTA`.** In the template `:STA` is an
+`mbbiDirect` scanning at a second whose `INP` processes `:CALSTA`, which
+processes the four status calcs through its own `PP` links. `:STA` is a `longIn`
+here and has no `INP`, so nothing would ever process any of them; `:CALSTA`
+drives itself at that same rate instead and the rest of the chain is intact.
+The status number is therefore worked out twice — by that chain, and in Python
+for `:STA` — from the same records with the same formulas. They agree, and
+`:STA` is the one a screen reads. Confirmed on a running IOC: opening a space's
+valves takes `:VALVESTA` 4 → 0, `:CALSTA` follows over its `PP MS` links, and
+`:STA` matches it value, severity and status (`MAJOR`, `LINK`) throughout.
+
+`builder.records.ai` and friends are the plain database records — epicsdbbuilder
+publishes one factory per record type as the dbd is loaded, and softioc's builder
+has no wrapper for them because there is no Python object behind them. They are
+reached through the `records: Any` alias at the top of `vacuum_space_records.py`,
+which is the whole of the type-checker suppression for a class built by
+`setattr`.
 
 ## Building an instance
 
@@ -732,7 +787,9 @@ sets its own port, so it needs only the two `EPICS_CAS_*` lines above.
   IOC serves. A space's `:STA` is a `longIn` where the template has an
   `mbbiDirect`, because pythonSoftIOC only builds those without device support and
   they cannot then be written from Python; the number is the same and only `.B0`
-  field access is lost.
+  field access is lost. That one costs a second: `:CALSTA` carries a `SCAN` the
+  template does not give it, because `:STA` has no `INP` left to process it with
+  — see *Spaces link, groups are copied*.
 - **The simulation comes up as a *running* front end** — pumps pumping, cold cathodes
   lit — where the real templates come up idle. Otherwise every volume leaks up to its
   vent pressure whenever the IOC is left alone. Both are constructor arguments

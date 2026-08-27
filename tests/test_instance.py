@@ -51,6 +51,93 @@ def test_the_instance_builds_its_records(generated, tmp_path):
     assert "SR99C-VA-SPACE-01" in text
 
 
+def records(database):
+    """{record name: {field: value}} for a dumped database."""
+    blocks = re.findall(
+        r'^record\(\w+,\s*"([^"]+)"\)\n\{(.*?)^\}',
+        database.read_text(),
+        re.M | re.S,
+    )
+    return {
+        name: dict(re.findall(r'field\((\w+),\s*"([^"]*)"\)', body))
+        for name, body in blocks
+    }
+
+
+# Which record and field of a space names each of its five groups, and what
+# the link reads off it.  This is space.template, and it is the whole of what
+# a real IOC writes down about which devices a space covers - there is no
+# record holding the group names, so anything working that out has to read
+# these.  Read it against the macros at the top of space.template.
+SPACE_LINKS = {
+    "ionp": ("IONPSTA", "INPA", "STA"),
+    "img": ("IMGSTA", "INPA", "STA"),
+    "valve": ("VALVESTA", "INPA", "STA"),
+    "gauge": ("P", "INP", "P"),
+    "pirg": ("CTL:SP", "INP", "CTL:SP"),
+}
+
+
+def test_a_space_says_which_groups_it_covers_where_the_real_ioc_does(
+    cellXml, generated, tmp_path
+):
+    """The five macros, read back off the link fields the template puts them in.
+
+    A space is pure aggregation and publishes nothing naming its groups, so
+    the links are the only record of them - which is how a script walking a
+    real cell finds out what a space is made of.  Simulating that means
+    building the links, not copying values in Python, and it means they have
+    to be the *same* fields: this asserts each one against the group the
+    builder XML declares, so a link moved to a PV of its own would fail here.
+    """
+    from dls_va_ioc_sim.builder_xml import parseXml
+
+    declarations = parseXml(cellXml, cell="99").spaces
+    assert declarations, "the fixture cell should declare spaces"
+
+    database = tmp_path / "spaces.db"
+    cli("dbdump", generated.name, str(database), cwd=tmp_path)
+    built = records(database)
+
+    for space in declarations:
+        for kind, (record, field, read) in SPACE_LINKS.items():
+            link = built[f"{space.prefix}:{record}"][field]
+            assert link.split()[0] == f"{space.groups[kind]}:{read}", (
+                f"{space.prefix}:{record}.{field} should name the {kind} group"
+            )
+
+
+def test_every_link_a_space_carries_names_a_record_the_ioc_builds(generated, tmp_path):
+    """A link naming nothing is silent: EPICS makes it a channel access link,
+    it never connects, and the record sits INVALID with no build time error.
+    So every input link of every space is resolved against the same
+    database - which also catches a group that stops building what a space
+    reads off it."""
+    database = tmp_path / "links.db"
+    cli("dbdump", generated.name, str(database), cwd=tmp_path)
+    built = records(database)
+
+    dangling, checked = [], 0
+    for name, fields in built.items():
+        if "-SPACE-" not in name:
+            continue
+        for field, value in fields.items():
+            if field not in ("INP", "INPA", "INPB", "INPC", "INPD"):
+                continue
+            target = value.split()[0]
+            # An `@name` is device support, not a link - it is how softioc
+            # addresses the Python object behind a record it builds itself.
+            # A constant, as :PSTA's INPB is, links to nothing either.
+            if target.startswith("@") or re.fullmatch(r"[-+.0-9eE]+", target):
+                continue
+            checked += 1
+            if target not in built:
+                dangling.append(f"{name}.{field} -> {target}")
+
+    assert checked, "the fixture cell should build spaces with input links"
+    assert not dangling, "links naming no record: " + ", ".join(dangling)
+
+
 def test_the_rack_and_the_plc_reach_the_database(generated, tmp_path):
     """None of these is a vacuum device and none of them ticks, so the only
     thing that can go wrong is that they are not built at all - which is

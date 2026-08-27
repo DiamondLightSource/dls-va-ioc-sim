@@ -52,9 +52,14 @@ STUBS = """
         which decides what the space sees.  The two that differ are the status
         records: :STA means a supply state on an ion pump group and a gauge
         state on an IMG group, and they are different numbers.
+
+        `prefix` is what the space's input links are written against.  Nothing
+        here builds the records those links name - there is no IOC in this
+        subprocess and nothing processes them - so it only has to be a name.
         '''
 
-        def __init__(self, pressure, status, valve):
+        def __init__(self, pressure, status, valve, prefix="FE99B-VA-GROUP-01"):
+            self.prefix = prefix
             self.pressurePV = reading(pressure)
             self.pressureLogPV = reading(math.log10(pressure))
             self.statusPV = reading(status)
@@ -95,9 +100,9 @@ STUBS = """
         # Numbered, because a record name can only be created once in a
         # process and a case may want to compare two spaces.
         built.append(len(built) + 1)
-        gauges = group(pressure, gauge, valve)
-        supplies = group(pressure, supply, valve)
-        valves = group(pressure, gauge, valve)
+        gauges = group(pressure, gauge, valve, "FE99B-VA-GGAUG-01")
+        supplies = group(pressure, supply, valve, "FE99B-VA-GIONP-01")
+        valves = group(pressure, gauge, valve, "FE99B-VA-GVALV-01")
         return spaceRecord(f"FE99B-VA-SPACE-{built[-1]:02d}",
                            ionp=supplies, gauge=gauges,
                            img=gauges, pirg=gauges, valve=valves)
