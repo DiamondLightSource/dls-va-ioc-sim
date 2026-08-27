@@ -284,6 +284,50 @@ them on numbered relays. So `:RLY:` is relay 1 (valve interlock), `:RLA:` is
 relay 2 (MPS interlock), `:RLB:` is the Pirani's relay 1 (ion pump interlock).
 `:PRO:ENABLE` is the one record with nowhere to go and is not created.
 
+### The `sel` that names the members is built for real
+
+Everything else a group aggregates is computed in Python, but **the one `sel`
+per template that lists the members is built as a real database record with
+real links** — because its link fields are the only place a real IOC writes
+down which devices a group covers. There is no record holding the member names,
+so a screen listing a group's members has to read them out of the links, and it
+has to get the same answer here. Same bargain as a space's, one layer down.
+
+| group | record | reads | `SELM` |
+| --- | --- | --- | --- |
+| `mks937bImgGroup` | `:SELSTA` | `$(imgN):STA MS` | High Signal |
+| `mks937bPirgGroup` | `:SELSTA` | `$(pirgN):STA` — no `MS` | High Signal |
+| `digitelMpcIonpGroup` | `:MAXSTA` / `:MINSTA` | `$(ionpN):STA MS` | High / Low |
+| `dlsPLC_vacValveGroup` | `:MINSTA` / `:MAXSTA` | `$(valveN):STA MS` | Low / High |
+
+The 937A group templates this framework builds from carry these records
+identically — only the line numbers differ. The gauge groups are not in the
+table: `mks937aGaugeGroup` names its members in `:SEL`, `:PLOG` and `:NWRSEL`,
+which are aggregated in Python like the rest, so a `GGAUG`'s membership is not
+discoverable. Its IMG and Pirani groups cover the same gauges and are.
+
+**All eight slots are filled, padded by repeating the last member**, which is
+what the builder XML does — `ionp1="…IONP-01" ionp2="…IONP-03"
+ionp3..8="…IONP-03"`. That is not cosmetic: an unset slot is a constant link
+reading 0, which a "Low Signal" `sel` picks in preference to any real valve. So
+anything reading these back folds out the duplicates, exactly as it must on the
+real IOC. `selectOverMembers` in `device_groups.py` builds all six, and
+`memberLinks` beside it raises rather than silently dropping a ninth member.
+
+`test_a_group_says_which_devices_it_covers_where_the_real_ioc_does` holds it,
+against the members the builder XML declares. Checked further by hand: all 30
+of these records in SR03C are byte-identical to the cell's own XML slot for
+slot, padding included. The value is then worked out twice, by the `sel` and in
+Python for `:STA`; confirmed on a running IOC that they agree, and that opening
+`SR03SM-VA-GVALV-01`'s two valves takes `:MINSTA`/`:MAXSTA` 3 → 1 with `:STA`
+following to Open.
+
+`SCAN` is the deviation, and it is the same one as `:CALSTA` on a space. The
+templates give these records no `SCAN`: each is processed by a `PP` link from
+the record above — `:STA`'s `INP` on the gauge groups, `:CALSTA`'s on the other
+two — and both of those are Python here, so nothing would ever process them.
+They are given `1 second`, the rate the templates poll the record above at.
+
 ## Spaces link, groups are copied
 
 **A group aggregates in Python; a space does not aggregate at all, so it links.**
@@ -310,9 +354,12 @@ SR03C-VA-SPACE-01:CTL:SP.INP    -> SR03C-VA-GPIRG-01:CTL:SP NPP MS # pirg
 Two tests hold that: `test_a_space_says_which_groups_it_covers_where_the_real_ioc_does`
 checks each of the five macros against the group the builder XML declares — so a
 link moved to a PV of its own fails — and
-`test_every_link_a_space_carries_names_a_record_the_ioc_builds` resolves every
-one of them against the same database, because a link naming nothing is silent:
-EPICS makes it a channel access link and the record sits INVALID with no error.
+`test_every_link_in_the_database_names_a_record_the_ioc_builds` resolves every
+input link in the database against that same database, because a link naming
+nothing is silent: EPICS makes it a channel access link and the record sits
+INVALID with no error. That second one is not space-specific and should stay
+that way — it is what catches a group that stops building the record a space
+reads off it, or the other way round.
 
 **The one deviation is `SCAN` on `:CALSTA`.** In the template `:STA` is an
 `mbbiDirect` scanning at a second whose `INP` processes `:CALSTA`, which
@@ -724,8 +771,12 @@ sets its own port, so it needs only the two `EPICS_CAS_*` lines above.
   docstring. Nothing outside the IOC reads `:COMMSMATCH`, the `:FAN10S` fanouts, the
   `:PSEQ`/`:HYSTSEQ` sequences or the `:SPOFFWRITE` chain, and there is no serial
   link here for them to drive. The groups skip the same sort of thing: `:CALSTA`,
-  `:MAXSTA`, `:MINSTA`, `:SELSTA`, `:SELERR` and the `:SEQ*` fan-out sequences are
-  internal to their templates and are computed in Python instead.
+  `:SELERR` and the `:SEQ*` fan-out sequences are internal to their templates and
+  are computed in Python instead. **`:MAXSTA`, `:MINSTA` and `:SELSTA` are the
+  exception and are built** — computing them as well — because their links are
+  the only place the IOC says what is in a group. See *The `sel` that names the
+  members is built for real*. That is the test for one of these: not "does
+  anything read the value", but "is this the only written record of something".
 - **Create records in the same order the builder XML does** wherever numbering is
   controller-wide. Relay *n* in `gaugeSet.xml` is IMG-a 1–4, IMG-b 5–8, PIRG-a 9–10,
   PIRG-b 11–12; grouping per gauge pair instead silently mis-points the

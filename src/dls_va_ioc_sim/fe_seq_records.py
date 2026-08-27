@@ -20,7 +20,13 @@ from time import sleep
 
 from softioc import builder
 
-from .device_groups import acceptDemand, deviceGroup, highest, lowest
+from .device_groups import (
+    acceptDemand,
+    deviceGroup,
+    highest,
+    lowest,
+    selectOverMembers,
+)
 
 
 class valveRecord:
@@ -240,6 +246,10 @@ class valveGroupRecord(deviceGroup):
     group show that instead, and only a group whose valves are all open reads
     Open.  A group is as shut as its most shut valve, which is what a screen
     wants of it.
+
+    :CALSTA's two inputs, :MINSTA and :MAXSTA, are built as the real `sel`
+    records they are even so.  Their links are the only place the IOC says
+    which valves this group covers - see device_groups.selectOverMembers.
     """
 
     STA_VALS = ["Fault", "Open", "Opening", "Closed", "Closing"]
@@ -256,6 +266,14 @@ class valveGroupRecord(deviceGroup):
                                 "Closing",
                                 DESC="Status",
                                 initial_value=self.status())
+
+        # The two halves of :CALSTA's `A<C?A:(B>C?(B>D?A:B):C)`, which is
+        # worked out in status() instead.  They are built for their links:
+        # these are the only place the IOC says which valves the group covers.
+        # The template gives neither a DESC and neither is given one here.
+        self.minStaPV = selectOverMembers("MINSTA", self.members,
+                                          selm="Low Signal")
+        self.maxStaPV = selectOverMembers("MAXSTA", self.members)
 
         self.ilkStaPV = builder.mbbIn("ILKSTA",
                                 "Failed",

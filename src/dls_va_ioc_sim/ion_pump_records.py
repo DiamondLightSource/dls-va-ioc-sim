@@ -39,7 +39,14 @@ from typing import Any
 
 from softioc import builder
 
-from .device_groups import acceptDemand, deviceGroup, highest, lowest, median
+from .device_groups import (
+    acceptDemand,
+    deviceGroup,
+    highest,
+    lowest,
+    median,
+    selectOverMembers,
+)
 from .vacuum_sim import PRESSURE_MAX, PRESSURE_MIN, clampPressure, droop, jitter
 
 # What a pump's readbacks are seeded with before the first tick.  A pump is
@@ -638,6 +645,10 @@ class ionPumpGroupRecord(deviceGroup):
     short of Running anywhere wins, otherwise the group is Running.  So a group
     shows a fault on one pump, or that a pump has yet to come up, in preference
     to claiming the whole group is running.
+
+    :CALSTA's two inputs, :MAXSTA and :MINSTA, are built as the real `sel`
+    records they are even so.  Their links are the only place the IOC says
+    which supplies this group covers - see device_groups.selectOverMembers.
     """
 
     def __init__(self, prefix, members, delay=0.0):
@@ -673,6 +684,14 @@ class ionPumpGroupRecord(deviceGroup):
         self.statusPV = builder.mbbIn("STA", *SUPPLY_STATES,
                                       DESC="Supply Status", UNSV="MAJOR",
                                       initial_value=self.status())
+
+        # The two halves of :CALSTA's `A>C?A:(B<C?B:C)`, which is worked out in
+        # status() instead.  They are built for their links: these are the only
+        # place the IOC says which supplies the group covers.  The template
+        # gives neither a DESC and neither is given one here.
+        self.maxStatusPV = selectOverMembers("MAXSTA", self.members)
+        self.minStatusPV = selectOverMembers("MINSTA", self.members,
+                                             selm="Low Signal")
 
         self.errorPV = builder.mbbIn("ERR", *ERROR_STATES,
                                      DESC="Error Code", UNSV="MINOR",

@@ -77,6 +77,26 @@ SPACE_LINKS = {
     "pirg": ("CTL:SP", "INP", "CTL:SP"),
 }
 
+# The same thing one layer down: which record of each group template carries
+# the member list, and what it reads off each member.  A group publishes no
+# record naming its members either, so these `sel` records' INPA..INPH are the
+# whole of what a real IOC says about which devices a group covers.  Read it
+# against mks937bImgGroup.template, mks937bPirgGroup.template,
+# digitelMpcIonpGroup.template and dlsPLC_vacValveGroup.vdb - the 937A group
+# templates this framework builds from carry the identical records.
+#
+# The gauge groups are not here: mks937aGaugeGroup names its members in :SEL,
+# :PLOG and :NWRSEL, which are aggregated in Python like the rest.
+GROUP_LINKS = {
+    "img": [("SELSTA", "STA MS")],
+    "pirg": [("SELSTA", "STA")],
+    "ionp": [("MAXSTA", "STA MS"), ("MINSTA", "STA MS")],
+    "valve": [("MINSTA", "STA MS"), ("MAXSTA", "STA MS")],
+}
+
+# INP, and the eight a `sel` or a `calc` fans in over.
+LINK_FIELDS = ("INP",) + tuple(f"INP{slot}" for slot in "ABCDEFGH")
+
 
 def test_a_space_says_which_groups_it_covers_where_the_real_ioc_does(
     cellXml, generated, tmp_path
@@ -107,22 +127,57 @@ def test_a_space_says_which_groups_it_covers_where_the_real_ioc_does(
             )
 
 
-def test_every_link_a_space_carries_names_a_record_the_ioc_builds(generated, tmp_path):
+def test_a_group_says_which_devices_it_covers_where_the_real_ioc_does(
+    cellXml, generated, tmp_path
+):
+    """Every member, in the eight slots the template has, padded as it pads.
+
+    A group aggregates in Python, so these `sel` records are worked out twice
+    over and exist only for their links - which makes it worth saying what
+    would break if they drifted: a screen listing a group's members reads
+    INPA..INPH off the real IOC, so all eight have to be filled, in the order
+    the XML fills them, with the padding repeating the last member.  An unset
+    slot is not merely undiscoverable, it is a constant reading 0 that a "Low
+    Signal" sel picks in preference to any real valve.
+    """
+    from dls_va_ioc_sim.builder_xml import parseXml
+
+    declarations = parseXml(cellXml, cell="99").groups
+    assert declarations, "the fixture cell should declare groups"
+
+    database = tmp_path / "groups.db"
+    cli("dbdump", generated.name, str(database), cwd=tmp_path)
+    built = records(database)
+
+    checked = 0
+    for group in declarations:
+        for record, read in GROUP_LINKS.get(group.kind, []):
+            fields = built[f"{group.prefix}:{record}"]
+            links = [f"{member}:{read}" for member in group.members]
+            links += links[-1:] * (8 - len(links))
+            assert [fields[field] for field in LINK_FIELDS[1:]] == links, (
+                f"{group.prefix}:{record} should name the members "
+                f"{group.kind} group declares"
+            )
+            checked += 1
+
+    assert checked, "the fixture cell should build groups that name their members"
+
+
+def test_every_link_in_the_database_names_a_record_the_ioc_builds(generated, tmp_path):
     """A link naming nothing is silent: EPICS makes it a channel access link,
     it never connects, and the record sits INVALID with no build time error.
-    So every input link of every space is resolved against the same
-    database - which also catches a group that stops building what a space
-    reads off it."""
+    So every input link in the database is resolved against that same
+    database - which is what catches a space or a group that stops building
+    the record another one reads off it."""
     database = tmp_path / "links.db"
     cli("dbdump", generated.name, str(database), cwd=tmp_path)
     built = records(database)
 
     dangling, checked = [], 0
     for name, fields in built.items():
-        if "-SPACE-" not in name:
-            continue
         for field, value in fields.items():
-            if field not in ("INP", "INPA", "INPB", "INPC", "INPD"):
+            if field not in LINK_FIELDS:
                 continue
             target = value.split()[0]
             # An `@name` is device support, not a link - it is how softioc
@@ -134,7 +189,7 @@ def test_every_link_a_space_carries_names_a_record_the_ioc_builds(generated, tmp
             if target not in built:
                 dangling.append(f"{name}.{field} -> {target}")
 
-    assert checked, "the fixture cell should build spaces with input links"
+    assert checked, "the fixture cell should build records with input links"
     assert not dangling, "links naming no record: " + ", ".join(dangling)
 
 

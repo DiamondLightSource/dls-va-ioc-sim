@@ -58,7 +58,13 @@ from typing import Any
 
 from softioc import alarm, builder
 
-from .device_groups import acceptDemand, deviceGroup, highest, lowest
+from .device_groups import (
+    acceptDemand,
+    deviceGroup,
+    highest,
+    lowest,
+    selectOverMembers,
+)
 from .vacuum_sim import clamp, jitter
 
 # What a gauge's readbacks are seeded with before the first tick, for the same
@@ -1048,6 +1054,11 @@ class imgGroupRecord(deviceGroup):
     describes: :RLY: is relay 1, the valve interlock, and :RLA: is relay 2, the
     MPS interlock.  :PRO:ENABLE is not created - a 937B's protection setpoint
     is the controller's own and has no relay behind it to force on.
+
+    :SELSTA, which the template's :STA reads, is built as the real `sel` record
+    it is even though :STA is aggregated in Python: its links are the only
+    place the IOC says which IMGs this group covers - see
+    device_groups.selectOverMembers.
     """
 
     def __init__(self, prefix, members, delay=0.0):
@@ -1077,6 +1088,11 @@ class imgGroupRecord(deviceGroup):
                                       DESC="Status", UNSV="MAJOR",
                                       initial_value=highest(self.members,
                                                             "statusPV"))
+
+        # The template's :STA reads this; here :STA is worked out in Python and
+        # this is built for its links, which say which IMGs the group covers.
+        self.selectStatusPV = selectOverMembers("SELSTA", self.members,
+                                                DESC="Select Status")
 
         self.pressurePV = builder.aIn("P", LOPR=1.0e-11, HOPR=0.01,
                                       EGU="mbar", PREC=11,
@@ -1168,6 +1184,9 @@ class pirgGroupRecord(deviceGroup):
     cathode is struck; on a 937B those records live under the Pirani's name but
     belong to the pair, and gaugeRecord hangs them on the Pirani for this group
     to find.  :RLY: is relay 1, the ion pump interlock - see relayOf.
+
+    :SELSTA is built as the real `sel` record it is, for the same reason as the
+    IMG group's, and is the one of these four the template does not tag MS.
     """
 
     def __init__(self, prefix, members, delay=0.0):
@@ -1177,6 +1196,13 @@ class pirgGroupRecord(deviceGroup):
                                       DESC="Status", UNSV="MAJOR",
                                       initial_value=highest(self.members,
                                                             "statusPV"))
+
+        # Which Piranis the group covers.  This is the one of these four that
+        # the template does *not* tag MS - a Pirani going into alarm does not
+        # take the group with it - so it is spelt out rather than defaulted.
+        self.selectStatusPV = selectOverMembers("SELSTA", self.members,
+                                                modifier="",
+                                                DESC="Select Status")
 
         self.pressurePV = builder.aIn("P", LOPR=0.001, HOPR=1000.0,
                                       EGU="mbar", PREC=1,

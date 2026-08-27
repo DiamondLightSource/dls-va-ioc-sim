@@ -8,6 +8,13 @@ repeating a member.  Here the aggregation is done in Python over however many
 members there actually are, and the group publishes the same records the
 template does.
 
+**The one exception is the `sel` that names the members**, which is built as a
+real database record with real links - `:SELSTA` on the gauge groups, `:MAXSTA`
+and `:MINSTA` on the ion pump and valve groups.  Its value is then worked out
+twice, which would be a reason to skip it like the rest, except that its link
+fields are the only place a real IOC records which devices a group covers.  See
+selectOverMembers.
+
 The one thing to get right is that **a group's members may themselves be
 groups**.  SR21C-VA-GIONP-01 in SR21C-VA-IOC-01.xml has SR21A-VA-GIONP-01 and
 SR21S-VA-GIONP-01 as its members, and a whole straight is started by writing to
@@ -39,9 +46,28 @@ published, they just go up and down within the one call.
 """
 
 from collections import deque
+from typing import Any
 from weakref import WeakKeyDictionary
 
 from softioc import builder, device
+
+# Plain database records, for the one thing a group cannot compute in Python -
+# see selectOverMembers.  epicsdbbuilder publishes one factory per record type
+# with setattr as the dbd is loaded, so a type checker sees an empty class; the
+# annotation is the whole of the suppression for that, as in
+# vacuum_space_records.
+records: Any = builder.records
+
+# A group template has eight slots whether or not it has eight members.
+MEMBER_SLOTS = "ABCDEFGH"
+
+# What a `sel` over a group's members scans at.  The templates give these
+# records no SCAN of their own - each is processed by a PP link from the record
+# above it, :STA's INP on the gauge groups and :CALSTA's on the other two, and
+# both of those are computed in Python here - so nothing would ever process
+# them.  This is the rate the templates poll the record above at.  It is the
+# same deviation, for the same reason, as :CALSTA on a vacuum space.
+SCAN_RATE = "1 second"
 
 
 def readings(members, field):
@@ -63,6 +89,54 @@ def median(members, field):
     """SELM "Median Signal", as the ion pump group takes its calibration."""
     values = sorted(readings(members, field))
     return values[len(values) // 2]
+
+
+def memberLinks(members, read="STA", modifier="MS"):
+    """INPA..INPH naming every member, padded the way the builder XML pads.
+
+    The XML fills all eight slots whatever the group holds, by repeating the
+    last real member:
+
+        ionp1="SR03S-VA-IONP-01" ionp2="SR03S-VA-IONP-03"
+        ionp3..8="SR03S-VA-IONP-03"
+
+    That padding is copied here rather than leaving the spare slots empty, and
+    it is not cosmetic: an unset link is a constant reading 0, which a "Low
+    Signal" sel would then pick every time and a group of two open valves would
+    read Fault for ever.  It does mean anything reading these back has to fold
+    out the duplicates - which is exactly what it has to do on the real IOC.
+    """
+    if len(members) > len(MEMBER_SLOTS):
+        raise ValueError(f"a group template has {len(MEMBER_SLOTS)} slots, "
+                         f"and this group has {len(members)} members")
+
+    links = [f"{member.prefix}:{read}" for member in members]
+    if modifier:
+        links = [f"{link} {modifier}" for link in links]
+    links += links[-1:] * (len(MEMBER_SLOTS) - len(links))
+    return {f"INP{slot}": link
+            for slot, link in zip(MEMBER_SLOTS, links, strict=True)}
+
+
+def selectOverMembers(name, members, selm="High Signal", read="STA",
+                      modifier="MS", **fields):
+    """The template's `sel` over the members, built as the real record it is.
+
+    A group aggregates in Python, so the *value* of one of these is worked out
+    twice - here by the database and again in publish() - and on its own that
+    would be a reason not to build it at all.  It is built for its link fields:
+    **they are the only place a real IOC writes down which devices a group
+    covers.** There is no record holding the member names, so a screen that
+    lists a group's members off a real cell has to read them out of
+    `GIONP-01:MAXSTA.INPA` and its neighbours, and has to get the same answer
+    here.  Same bargain as a vacuum space's links; see vacuum_space_records.
+
+    `read` and `modifier` are what the template puts on the far end of each
+    link.  They vary: a Pirani group's SELSTA reads `$(pirg1):STA` with an
+    empty modifier where every other one of these carries MS.
+    """
+    return records.sel(name, SELM=selm, SCAN=SCAN_RATE,
+                       **memberLinks(members, read, modifier), **fields)
 
 
 # Every demand this simulation has written to an output record and not yet seen
